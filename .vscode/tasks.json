@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo: check",
+      "type": "shell",
+      "command": "cargo check --workspace",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "cargo: clippy",
+      "type": "shell",
+      "command": "cargo clippy --workspace --all-targets -- -D warnings",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "cargo: test",
+      "type": "shell",
+      "command": "cargo test --workspace",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "flutter: pub get",
+      "type": "shell",
+      "command": "flutter pub get",
+      "options": { "cwd": "${workspaceFolder}/apps/client" },
+      "problemMatcher": []
+    },
+    {
+      "label": "flutter: run (macos)",
+      "type": "shell",
+      "command": "flutter run -d macos",
+      "options": { "cwd": "${workspaceFolder}/apps/client" },
+      "problemMatcher": [],
+      "dependsOn": ["flutter: pub get"]
+    }
+  ]
+}

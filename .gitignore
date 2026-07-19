@@ -1,0 +1,58 @@
+# Internal planning (local only — same policy as Waypoint)
+plan_docs/
+plan_docs_draft/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/*.log
+
+# Waypoint (keep agent config; ignore runtime store)
+.waypoint/objects/
+.waypoint/store/
+.waypoint/runs/
+.waypoint/refs/
+.waypoint/links/
+.waypoint/structure/
+
+# Rust
+**/target/
+**/*.rs.bk
+
+# Flutter / Dart
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/build/
+**/.packages
+**/.pub-cache/
+**/.pub/
+
+# Native / FFI
+**/*.so
+**/*.dylib
+**/*.dll
+**/*.o
+**/*.a
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+credentials.json
+
+# FRB / codegen
+**/frb_generated.*
+**/cargokit/
+**/.flutter-plugins-dependencies
+
+# Coverage
+**/coverage/
+**/lcov.info

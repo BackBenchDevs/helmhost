@@ -1,0 +1,13 @@
+{
+  "force_indexed_tools": true,
+  "mcp_server": "waypoint",
+  "mcp_servers": {
+    "waypoint": {
+      "command": "wpt",
+      "args": [
+        "mcp"
+      ]
+    }
+  },
+  "session_prompt": "Waypoint-first (structural RAG): call agent_brief; abort if agent_ready is false; use query|locate then context_pack need=symbol|flow; IDE-Read only cited line ranges; impact_check|flow_trace before shared API edits; wpt sync after edits. Never dump whole files via need=all unless include_text=true. Prefer citations over raw grep."
+}
