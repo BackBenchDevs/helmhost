@@ -1,0 +1,15 @@
+[package]
+name = "helmhost-rfb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RFB / VNC protocol engine for Helmhost"
+
+[dependencies]
+helmhost-core = { workspace = true }
+tokio = { workspace = true }
+des = "0.8"
+cipher = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
