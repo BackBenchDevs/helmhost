@@ -1,6 +1,12 @@
-//! Protocol-agnostic session traits (F04). RFB implements these in P3.
+//! Protocol-agnostic async session API (command / event queues).
 
 use crate::session::SessionId;
+use std::future::Future;
+use std::pin::Pin;
+use tokio::sync::mpsc;
+
+/// Boxed async future used by [`SessionFactory::connect`].
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Identifies a remote-desktop protocol (e.g. RFB).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -53,35 +59,59 @@ pub struct KeyEvent {
     pub keysym: u32,
 }
 
+/// App → session commands (writer task drains these).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionStatus {
-    Ok,
-    Closed,
+pub enum SessionCommand {
+    Pointer(PointerEvent),
+    Key(KeyEvent),
+    CutText(String),
+    RequestUpdate { incremental: bool },
+    Close,
+}
+
+/// Session → app events (reader/decode tasks produce these).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEvent {
+    DesktopResize { w: u32, h: u32 },
+    Damage { rect: Rect, rgba: Vec<u8> },
+    Bell,
+    Clipboard(String),
+    Disconnected,
     Error(String),
 }
 
-/// Receives framebuffer updates from a [`RemoteSession`].
-pub trait FrameSink: Send {
-    fn on_desktop_resize(&mut self, w: u32, h: u32);
-    fn on_damage(&mut self, rect: Rect, rgba: &[u8]);
+/// Default bound for per-session command / event queues.
+pub const DEFAULT_QUEUE_CAPACITY: usize = 64;
+
+/// Handle returned after a successful async connect.
+pub struct SessionHandle {
+    pub id: SessionId,
+    pub width: u32,
+    pub height: u32,
+    pub events: mpsc::Receiver<SessionEvent>,
+    pub commands: mpsc::Sender<SessionCommand>,
 }
 
-/// Live remote desktop session — protocol-agnostic.
-pub trait RemoteSession: Send {
-    fn session_id(&self) -> SessionId;
-    fn desktop_size(&self) -> (u32, u32);
-    fn send_pointer(&mut self, ev: PointerEvent) -> Result<(), String>;
-    fn send_key(&mut self, ev: KeyEvent) -> Result<(), String>;
-    fn poll(&mut self, sink: &mut dyn FrameSink) -> Result<SessionStatus, String>;
-    fn close(&mut self);
+impl SessionHandle {
+    pub async fn send(&self, cmd: SessionCommand) -> Result<(), String> {
+        self.commands
+            .send(cmd)
+            .await
+            .map_err(|_| "session command queue closed".to_string())
+    }
+
+    pub async fn close(self) -> Result<(), String> {
+        self.send(SessionCommand::Close).await
+    }
 }
 
-/// Creates [`RemoteSession`] instances for one protocol.
+/// Creates async RFB (or other) sessions behind a queue handle.
 pub trait SessionFactory: Send + Sync {
     fn protocol(&self) -> ProtocolId;
+
     fn connect(
         &self,
-        target: &ConnectTarget,
-        creds: &Creds,
-    ) -> Result<Box<dyn RemoteSession>, String>;
+        target: ConnectTarget,
+        creds: Creds,
+    ) -> BoxFuture<'_, Result<SessionHandle, String>>;
 }

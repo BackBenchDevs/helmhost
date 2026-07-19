@@ -1,16 +1,25 @@
 //! Client → server and server → client message codecs.
 
 use crate::pixel_format::{raw_to_rgba, PixelFormat};
-use helmhost_core::{FrameSink, KeyEvent, PointerEvent, Rect};
+use helmhost_core::{KeyEvent, PointerEvent, Rect};
 
 pub const MSG_FRAMEBUFFER_UPDATE: u8 = 0;
+pub const MSG_SET_COLOUR_MAP: u8 = 1;
+pub const MSG_BELL: u8 = 2;
+pub const MSG_SERVER_CUT_TEXT: u8 = 3;
+
 pub const ENC_RAW: i32 = 0;
+pub const ENC_COPYRECT: i32 = 1;
+pub const ENC_ZRLE: i32 = 16;
+pub const ENC_DESKTOP_SIZE: i32 = -223;
+pub const ENC_LAST_RECT: i32 = -224;
 
 pub const CLIENT_SET_PIXEL_FORMAT: u8 = 0;
 pub const CLIENT_SET_ENCODINGS: u8 = 2;
 pub const CLIENT_FB_UPDATE_REQUEST: u8 = 3;
 pub const CLIENT_KEY_EVENT: u8 = 4;
 pub const CLIENT_POINTER_EVENT: u8 = 5;
+pub const CLIENT_CUT_TEXT: u8 = 6;
 
 pub fn encode_set_encodings(encodings: &[i32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + encodings.len() * 4);
@@ -21,6 +30,10 @@ pub fn encode_set_encodings(encodings: &[i32]) -> Vec<u8> {
         out.extend_from_slice(&e.to_be_bytes());
     }
     out
+}
+
+pub fn preferred_encodings() -> [i32; 3] {
+    [ENC_ZRLE, ENC_COPYRECT, ENC_RAW]
 }
 
 pub fn encode_fb_update_request(incremental: bool, x: u16, y: u16, w: u16, h: u16) -> [u8; 10] {
@@ -60,6 +73,16 @@ pub fn encode_set_pixel_format(pf: &PixelFormat) -> [u8; 20] {
     b
 }
 
+pub fn encode_client_cut_text(text: &str) -> Vec<u8> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(8 + bytes.len());
+    out.push(CLIENT_CUT_TEXT);
+    out.extend_from_slice(&[0, 0, 0]);
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(bytes);
+    out
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FramebufferRectHeader {
     pub x: u16,
@@ -70,7 +93,6 @@ pub struct FramebufferRectHeader {
 }
 
 pub fn parse_fb_update_header(buf: &[u8]) -> Result<(u16, usize), String> {
-    // type(1) + pad(1) + nRects(2)
     if buf.len() < 4 {
         return Err("fb update header truncated".into());
     }
@@ -97,13 +119,12 @@ pub fn parse_rect_header(buf: &[u8]) -> Result<(FramebufferRectHeader, usize), S
     ))
 }
 
-/// Apply one Raw rectangle to the sink.
-pub fn apply_raw_rect(
+/// Decode one Raw rectangle to RGBA8.
+pub fn decode_raw_rect(
     pf: &PixelFormat,
     hdr: &FramebufferRectHeader,
     data: &[u8],
-    sink: &mut dyn FrameSink,
-) -> Result<usize, String> {
+) -> Result<(Rect, Vec<u8>), String> {
     if hdr.encoding != ENC_RAW {
         return Err(format!("unsupported encoding {}", hdr.encoding));
     }
@@ -113,14 +134,36 @@ pub fn apply_raw_rect(
         return Err("raw rect truncated".into());
     }
     let rgba = raw_to_rgba(pf, u32::from(hdr.w), u32::from(hdr.h), &data[..nbytes])?;
-    sink.on_damage(
+    Ok((
         Rect {
             x: i32::from(hdr.x),
             y: i32::from(hdr.y),
             w: u32::from(hdr.w),
             h: u32::from(hdr.h),
         },
-        &rgba,
-    );
-    Ok(nbytes)
+        rgba,
+    ))
+}
+
+/// Legacy name used by older unit tests.
+pub fn apply_raw_rect(
+    pf: &PixelFormat,
+    hdr: &FramebufferRectHeader,
+    data: &[u8],
+) -> Result<(Rect, Vec<u8>), String> {
+    decode_raw_rect(pf, hdr, data)
+}
+
+pub fn parse_copyrect_src(data: &[u8]) -> Result<(u16, u16), String> {
+    if data.len() < 4 {
+        return Err("copyrect truncated".into());
+    }
+    Ok((
+        u16::from_be_bytes([data[0], data[1]]),
+        u16::from_be_bytes([data[2], data[3]]),
+    ))
+}
+
+pub fn parse_server_cut_text(payload: &[u8]) -> Result<String, String> {
+    String::from_utf8(payload.to_vec()).map_err(|e| e.to_string())
 }

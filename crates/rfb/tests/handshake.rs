@@ -18,8 +18,8 @@ fn parse_version_line() {
 fn security_types_and_pick() {
     let types = parse_security_types(&[2, SEC_NONE, SEC_VNC_AUTH]).unwrap();
     assert_eq!(types, vec![SEC_NONE, SEC_VNC_AUTH]);
-    assert_eq!(pick_security(&types, false).unwrap(), SEC_NONE);
-    assert_eq!(pick_security(&types, true).unwrap(), SEC_VNC_AUTH);
+    assert_eq!(pick_security(&types, false, false).unwrap(), SEC_NONE);
+    assert_eq!(pick_security(&types, true, false).unwrap(), SEC_VNC_AUTH);
 }
 
 #[test]
