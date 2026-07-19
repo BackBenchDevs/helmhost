@@ -34,7 +34,7 @@
     "editor.defaultFormatter": "tamasfe.even-better-toml",
     "editor.formatOnSave": true
   },
-  "rust-analyzer.linkedProjects": [],
+  "rust-analyzer.linkedProjects": ["Cargo.toml"],
   "rust-analyzer.cargo.buildScripts.enable": true,
   "rust-analyzer.check.command": "clippy",
   "rust-analyzer.procMacro.enable": true,

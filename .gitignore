@@ -19,6 +19,9 @@ Thumbs.db
 .waypoint/refs/
 .waypoint/links/
 .waypoint/structure/
+.waypoint/cache/
+.waypoint/logs/
+.waypoint/.cursor/
 
 # Rust
 **/target/
