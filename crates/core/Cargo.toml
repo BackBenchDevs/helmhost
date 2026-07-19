@@ -6,3 +6,7 @@ license.workspace = true
 description = "Session manager, connection registry, input focus, protocol traits"
 
 [dependencies]
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }

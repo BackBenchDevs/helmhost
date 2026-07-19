@@ -1,12 +1,15 @@
-//! RFB handshake: version, security, init.
+//! RFB handshake: version, security, init (async).
 
 use crate::auth::encrypt_challenge;
+use crate::io::{read_exact, write_all};
 use crate::pixel_format::PixelFormat;
-use std::io::{Read, Write};
+use helmhost_core::Creds;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 pub const RFB_003_008: &[u8] = b"RFB 003.008\n";
 pub const SEC_NONE: u8 = 1;
 pub const SEC_VNC_AUTH: u8 = 2;
+pub const SEC_VENCRYPT: u8 = 19;
 pub const SEC_RESULT_OK: u32 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,17 +18,6 @@ pub struct ServerInit {
     pub height: u16,
     pub pixel_format: PixelFormat,
     pub name: String,
-}
-
-/// Read exactly `n` bytes.
-pub fn read_exact<R: Read>(r: &mut R, n: usize) -> Result<Vec<u8>, String> {
-    let mut buf = vec![0u8; n];
-    r.read_exact(&mut buf).map_err(|e| e.to_string())?;
-    Ok(buf)
-}
-
-pub fn write_all<W: Write>(w: &mut W, data: &[u8]) -> Result<(), String> {
-    w.write_all(data).map_err(|e| e.to_string())
 }
 
 /// Parse server version line (12 bytes including newline).
@@ -44,14 +36,12 @@ pub fn encode_client_version() -> [u8; 12] {
     out
 }
 
-/// After client version: server sends number of security types + list (3.8).
 pub fn parse_security_types(buf: &[u8]) -> Result<Vec<u8>, String> {
     if buf.is_empty() {
         return Err("empty security".into());
     }
     let n = buf[0] as usize;
     if n == 0 {
-        // Failure: 4-byte reason length follows in full stream; here just error
         return Err("server rejected security (zero types)".into());
     }
     if buf.len() < 1 + n {
@@ -60,7 +50,10 @@ pub fn parse_security_types(buf: &[u8]) -> Result<Vec<u8>, String> {
     Ok(buf[1..1 + n].to_vec())
 }
 
-pub fn pick_security(types: &[u8], have_password: bool) -> Result<u8, String> {
+pub fn pick_security(types: &[u8], have_password: bool, allow_vencrypt: bool) -> Result<u8, String> {
+    if allow_vencrypt && types.contains(&SEC_VENCRYPT) {
+        return Ok(SEC_VENCRYPT);
+    }
     if have_password && types.contains(&SEC_VNC_AUTH) {
         return Ok(SEC_VNC_AUTH);
     }
@@ -109,12 +102,82 @@ pub fn parse_server_init(buf: &[u8]) -> Result<ServerInit, String> {
     })
 }
 
-/// Run VNC auth: read 16-byte challenge, write response.
-pub fn vnc_auth_exchange<S: Read + Write>(stream: &mut S, password: &str) -> Result<(), String> {
-    let challenge = read_exact(stream, 16)?;
+pub async fn vnc_auth_exchange<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    password: &str,
+) -> Result<(), String> {
+    let challenge = read_exact(stream, 16).await?;
     let mut ch = [0u8; 16];
     ch.copy_from_slice(&challenge);
     let resp = encrypt_challenge(password, &ch);
-    write_all(stream, &resp)?;
+    write_all(stream, &resp).await?;
     Ok(())
+}
+
+/// Classic (non-TLS) security + ClientInit/ServerInit. Caller handles VeNCrypt separately.
+pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    creds: &Creds,
+    prefer_vencrypt: bool,
+) -> Result<(ServerInit, Option<u8>), String> {
+    let ver = read_exact(stream, 12).await?;
+    let _ = parse_version(&ver)?;
+    write_all(stream, &encode_client_version()).await?;
+
+    let nbuf = read_exact(stream, 1).await?;
+    let n = nbuf[0] as usize;
+    if n == 0 {
+        return Err("server sent zero security types".into());
+    }
+    let rest = read_exact(stream, n).await?;
+    let mut full = Vec::with_capacity(1 + n);
+    full.push(nbuf[0]);
+    full.extend_from_slice(&rest);
+    let types = parse_security_types(&full)?;
+
+    let have_pw = creds.password.as_ref().is_some_and(|p| !p.is_empty());
+    let sec = pick_security(&types, have_pw, prefer_vencrypt)?;
+    write_all(stream, &[sec]).await?;
+
+    if sec == SEC_VENCRYPT {
+        return Ok((
+            ServerInit {
+                width: 0,
+                height: 0,
+                pixel_format: PixelFormat::rgb888_le(),
+                name: String::new(),
+            },
+            Some(SEC_VENCRYPT),
+        ));
+    }
+
+    match sec {
+        SEC_NONE => {}
+        SEC_VNC_AUTH => {
+            let pw = creds
+                .password
+                .as_deref()
+                .ok_or_else(|| "password required for VNC Auth".to_string())?;
+            vnc_auth_exchange(stream, pw).await?;
+        }
+        other => return Err(format!("unsupported security {other}")),
+    }
+
+    let result = read_exact(stream, 4).await?;
+    parse_security_result(&result)?;
+
+    let init = finish_client_server_init(stream).await?;
+    Ok((init, None))
+}
+
+pub async fn finish_client_server_init<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+) -> Result<ServerInit, String> {
+    write_all(stream, &encode_client_init(true)).await?;
+    let head = read_exact(stream, 24).await?;
+    let name_len = u32::from_be_bytes([head[20], head[21], head[22], head[23]]) as usize;
+    let name_bytes = read_exact(stream, name_len).await?;
+    let mut init_buf = head;
+    init_buf.extend_from_slice(&name_bytes);
+    parse_server_init(&init_buf)
 }

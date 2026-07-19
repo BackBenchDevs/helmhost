@@ -1,27 +1,14 @@
-//! Raw framebuffer → FrameSink (B2) and input encode (B3).
+//! Raw / CopyRect / encodings unit tests.
 
-use helmhost_core::{FrameSink, KeyEvent, PointerEvent, Rect};
+use helmhost_core::{KeyEvent, PointerEvent, Rect};
+use helmhost_rfb::fb_cache::FramebufferCache;
 use helmhost_rfb::messages::{
-    apply_raw_rect, encode_fb_update_request, encode_key_event, encode_pointer_event,
-    parse_fb_update_header, parse_rect_header, FramebufferRectHeader, ENC_RAW,
-    MSG_FRAMEBUFFER_UPDATE,
+    apply_raw_rect, encode_client_cut_text, encode_fb_update_request, encode_key_event,
+    encode_pointer_event, parse_fb_update_header, parse_rect_header, preferred_encodings,
+    FramebufferRectHeader, ENC_COPYRECT, ENC_RAW, ENC_ZRLE, MSG_FRAMEBUFFER_UPDATE,
 };
 use helmhost_rfb::pixel_format::{raw_to_rgba, PixelFormat};
-
-struct RecordingSink {
-    damages: Vec<(Rect, Vec<u8>)>,
-    size: Option<(u32, u32)>,
-}
-
-impl FrameSink for RecordingSink {
-    fn on_desktop_resize(&mut self, w: u32, h: u32) {
-        self.size = Some((w, h));
-    }
-
-    fn on_damage(&mut self, rect: Rect, rgba: &[u8]) {
-        self.damages.push((rect, rgba.to_vec()));
-    }
-}
+use helmhost_rfb::zrle::decode_zrle;
 
 #[test]
 fn fb_update_request_bytes() {
@@ -33,9 +20,8 @@ fn fb_update_request_bytes() {
 }
 
 #[test]
-fn parse_fb_and_raw_to_sink() {
+fn parse_fb_and_raw() {
     let pf = PixelFormat::rgb888_le();
-    // one red pixel: R=255 G=0 B=0 in LE 32bpp (R at shift 0)
     let pixel = [255u8, 0, 0, 0];
     let rgba = raw_to_rgba(&pf, 1, 1, &pixel).unwrap();
     assert_eq!(rgba, vec![255, 0, 0, 255]);
@@ -47,14 +33,9 @@ fn parse_fb_and_raw_to_sink() {
         h: 1,
         encoding: ENC_RAW,
     };
-    let mut sink = RecordingSink {
-        damages: vec![],
-        size: None,
-    };
-    apply_raw_rect(&pf, &hdr, &pixel, &mut sink).unwrap();
-    assert_eq!(sink.damages.len(), 1);
-    assert_eq!(sink.damages[0].0.x, 1);
-    assert_eq!(sink.damages[0].1, vec![255, 0, 0, 255]);
+    let (rect, out) = apply_raw_rect(&pf, &hdr, &pixel).unwrap();
+    assert_eq!(rect.x, 1);
+    assert_eq!(out, vec![255, 0, 0, 255]);
 }
 
 #[test]
@@ -93,4 +74,57 @@ fn pointer_and_key_encode() {
     assert_eq!(k[0], 4);
     assert_eq!(k[1], 1);
     assert_eq!(&k[4..8], &0xff0du32.to_be_bytes());
+}
+
+#[test]
+fn preferred_encodings_order() {
+    assert_eq!(preferred_encodings(), [ENC_ZRLE, ENC_COPYRECT, ENC_RAW]);
+}
+
+#[test]
+fn copyrect_via_cache() {
+    let mut cache = FramebufferCache::new(4, 2);
+    let red = vec![255u8, 0, 0, 255, 255, 0, 0, 255];
+    cache
+        .put_damage(
+            Rect {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 1,
+            },
+            &red,
+        )
+        .unwrap();
+    let copied = cache
+        .copy_rect(
+            Rect {
+                x: 2,
+                y: 0,
+                w: 2,
+                h: 1,
+            },
+            0,
+            0,
+        )
+        .unwrap();
+    assert_eq!(copied, red);
+}
+
+#[test]
+fn zrle_fixture_file() {
+    let pf = PixelFormat::rgb888_le();
+    let data = include_bytes!("fixtures/zrle_2x2_solid.bin");
+    let rgba = decode_zrle(&pf, 2, 2, data).unwrap();
+    assert_eq!(rgba.len(), 16);
+    assert_eq!(&rgba[0..3], &[10, 20, 30]);
+}
+
+
+#[test]
+fn client_cut_text_encode() {
+    let b = encode_client_cut_text("hi");
+    assert_eq!(b[0], 6);
+    assert_eq!(&b[4..8], &2u32.to_be_bytes());
+    assert_eq!(&b[8..], b"hi");
 }
