@@ -1,0 +1,35 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Helmhost: Flutter (macos)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "apps/client",
+      "program": "lib/main.dart",
+      "args": ["-d", "macos"]
+    },
+    {
+      "name": "Helmhost: Flutter (chrome)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "apps/client",
+      "program": "lib/main.dart",
+      "args": ["-d", "chrome"]
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Helmhost: Rust unit tests (core)",
+      "cargo": {
+        "args": ["test", "-p", "helmhost-core", "--no-run"],
+        "filter": {
+          "name": "helmhost_core",
+          "kind": "lib"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
