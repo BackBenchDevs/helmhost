@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# hh-version — single CLI for Helmhost version SSOT (VERSION) + mirrors + git tags.
+# Humans do not hand-edit Cargo.toml / pubspec version fields.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION_FILE="$ROOT/VERSION"
+CARGO_TOML="$ROOT/Cargo.toml"
+PUBSPEC="$ROOT/apps/client/pubspec.yaml"
+
+BUILD=1
+ALLOW_DIRTY=0
+PUSH=0
+YES=0
+RC=""
+
+usage() {
+  cat <<'EOF'
+Usage: hh-version <command> [args]
+
+  show                         Print VERSION and mirrored Cargo/pubspec
+  sync [--build N]             VERSION → Cargo.toml + pubspec.yaml
+  set <X.Y.Z> [--build N]      Write VERSION, then sync
+  bump patch|minor|major [--build N]
+  tag [--rc N] [--allow-dirty] [--push]
+                               Annotated tag vX.Y.Z or vX.Y.Z-rc.N
+  release patch|minor|major [--yes] [--build N] [--allow-dirty] [--push]
+                               bump + sync + stable tag (dry-run unless --yes)
+
+SSOT is VERSION. RC tags do not change VERSION (tag only).
+EOF
+}
+
+read_version() {
+  if [[ ! -f "$VERSION_FILE" ]]; then
+    echo "error: missing $VERSION_FILE" >&2
+    exit 1
+  fi
+  tr -d '[:space:]' <"$VERSION_FILE"
+}
+
+validate_semver() {
+  local v="$1"
+  if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "error: version must be X.Y.Z (got '$v')" >&2
+    exit 1
+  fi
+}
+
+sync_mirrors() {
+  local ver
+  ver="$(read_version)"
+  validate_semver "$ver"
+
+  # Cargo.toml: [workspace.package] version = "..."
+  if grep -q '^\[workspace.package\]' "$CARGO_TOML"; then
+    # Replace first version = "..." after [workspace.package] — simple whole-file for version.workspace packages
+    perl -i -0pe 's/(\[workspace\.package\]\s*\n(?:.*\n)*?version\s*=\s*")[^"]+(")/${1}'"$ver"'${2}/' "$CARGO_TOML"
+    # Also top-level if present without workspace.package block match — ensure package versions use workspace
+  else
+    echo "error: Cargo.toml missing [workspace.package]" >&2
+    exit 1
+  fi
+
+  # If version.workspace is used, also set workspace.package.version (done above).
+  # pubspec: version: X.Y.Z+BUILD
+  if [[ "$(uname)" == Darwin ]]; then
+    sed -i '' -E "s/^version: .*/version: ${ver}+${BUILD}/" "$PUBSPEC"
+  else
+    sed -i -E "s/^version: .*/version: ${ver}+${BUILD}/" "$PUBSPEC"
+  fi
+
+  echo "synced: VERSION=$ver  pubspec=${ver}+${BUILD}  Cargo workspace=$ver"
+}
+
+cmd_show() {
+  local ver
+  ver="$(read_version)"
+  echo "VERSION:  $ver"
+  echo -n "Cargo:    "
+  grep -A5 '^\[workspace.package\]' "$CARGO_TOML" | grep '^version' | head -1 || echo "(missing)"
+  echo -n "pubspec:  "
+  grep '^version:' "$PUBSPEC" | head -1
+}
+
+parse_global_flags() {
+  PARSED_ARGS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --build)
+        BUILD="$2"
+        shift 2
+        ;;
+      --allow-dirty)
+        ALLOW_DIRTY=1
+        shift
+        ;;
+      --push)
+        PUSH=1
+        shift
+        ;;
+      --yes)
+        YES=1
+        shift
+        ;;
+      --rc)
+        RC="$2"
+        shift 2
+        ;;
+      *)
+        PARSED_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+require_clean() {
+  if [[ "$ALLOW_DIRTY" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
+    echo "error: working tree dirty (use --allow-dirty)" >&2
+    exit 1
+  fi
+}
+
+cmd_tag() {
+  require_clean
+  sync_mirrors
+  local ver tag
+  ver="$(read_version)"
+  if [[ -n "$RC" ]]; then
+    tag="v${ver}-rc.${RC}"
+  else
+    tag="v${ver}"
+  fi
+  if git -C "$ROOT" rev-parse "$tag" >/dev/null 2>&1; then
+    echo "error: tag $tag already exists" >&2
+    exit 1
+  fi
+  git -C "$ROOT" tag -a "$tag" -m "Helmhost $tag"
+  echo "created annotated tag $tag"
+  if [[ "$PUSH" -eq 1 ]]; then
+    git -C "$ROOT" push origin "$tag"
+  else
+    echo "next: git push origin $tag"
+  fi
+}
+
+cmd_bump() {
+  local part="$1"
+  local ver major minor patch
+  ver="$(read_version)"
+  validate_semver "$ver"
+  IFS=. read -r major minor patch <<<"$ver"
+  case "$part" in
+    major) major=$((major + 1)); minor=0; patch=0 ;;
+    minor) minor=$((minor + 1)); patch=0 ;;
+    patch) patch=$((patch + 1)) ;;
+    *)
+      echo "error: bump expects patch|minor|major" >&2
+      exit 1
+      ;;
+  esac
+  echo "${major}.${minor}.${patch}" >"$VERSION_FILE"
+  sync_mirrors
+}
+
+cmd_release() {
+  local part="$1"
+  if [[ "$YES" -ne 1 ]]; then
+    echo "dry-run: would bump $part, sync, and tag vNEW (pass --yes to apply)"
+    local ver
+    ver="$(read_version)"
+    echo "current VERSION=$ver"
+    exit 0
+  fi
+  cmd_bump "$part"
+  RC=""
+  cmd_tag
+}
+
+main() {
+  if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
+  fi
+  local cmd="$1"
+  shift
+  parse_global_flags "$@"
+  set -- ${PARSED_ARGS[@]+"${PARSED_ARGS[@]}"}
+
+  case "$cmd" in
+    show) cmd_show ;;
+    sync) sync_mirrors ;;
+    set)
+      [[ $# -ge 1 ]] || { echo "usage: hh-version set X.Y.Z" >&2; exit 1; }
+      validate_semver "$1"
+      echo "$1" >"$VERSION_FILE"
+      sync_mirrors
+      ;;
+    bump)
+      [[ $# -ge 1 ]] || { echo "usage: hh-version bump patch|minor|major" >&2; exit 1; }
+      cmd_bump "$1"
+      ;;
+    tag) cmd_tag ;;
+    release)
+      [[ $# -ge 1 ]] || { echo "usage: hh-version release patch|minor|major [--yes]" >&2; exit 1; }
+      cmd_release "$1"
+      ;;
+    -h|--help|help) usage ;;
+    *)
+      echo "unknown command: $cmd" >&2
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

@@ -63,6 +63,9 @@ credentials.json
 **/coverage/
 **/lcov.info
 
+# Packaged builds
+dist/
+
 # Local Flutter SDK + build artifacts
 tools/
 

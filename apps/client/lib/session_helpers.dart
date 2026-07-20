@@ -1,8 +1,17 @@
-// Pure helpers for Hub session dedup / keys (unit-testable).
+// Pure helpers for Hub session dedup / keys / library (unit-testable).
+
+import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 
 String sessionKey(String host, int port) => '$host:$port';
+
+int portFromDisplay(int display) => 5900 + display;
+
+int? displayFromPort(int port) {
+  if (port >= 5900 && port <= 5999) return port - 5900;
+  return null;
+}
 
 class OpenSessionRef {
   const OpenSessionRef({
@@ -18,7 +27,6 @@ class OpenSessionRef {
   String get key => sessionKey(host, port);
 }
 
-/// Returns the first open session matching host:port, if any.
 OpenSessionRef? findOpenByHostPort(
   Iterable<OpenSessionRef> sessions,
   String host,
@@ -31,34 +39,189 @@ OpenSessionRef? findOpenByHostPort(
   return null;
 }
 
-/// Local framebuffer display modes (no remote SetDesktopSize).
+/// Library card model (from registry JSON).
+class LibraryCard {
+  const LibraryCard({
+    required this.id,
+    required this.host,
+    required this.port,
+    this.displayName,
+    this.displayNumber,
+    this.tags = const [],
+    this.lastConnectedAt,
+    this.thumbPath,
+    this.username,
+    this.preferVencrypt = false,
+    this.acceptInvalidCerts = false,
+    this.viewOnly = false,
+    this.notes,
+    this.openSessionId,
+  });
+
+  final String id;
+  final String host;
+  final int port;
+  final String? displayName;
+  final int? displayNumber;
+  final List<String> tags;
+  final int? lastConnectedAt;
+  final String? thumbPath;
+  final String? username;
+  final bool preferVencrypt;
+  final bool acceptInvalidCerts;
+  final bool viewOnly;
+  final String? notes;
+  final int? openSessionId;
+
+  String get title =>
+      (displayName != null && displayName!.isNotEmpty) ? displayName! : id;
+
+  String get subtitle {
+    final d = displayNumber ?? displayFromPort(port);
+    if (d != null) return '$host :$d ($port)';
+    return '$host:$port';
+  }
+
+  bool get isOpen => openSessionId != null;
+
+  factory LibraryCard.fromJson(Map<String, dynamic> j, {int? openSessionId}) {
+    final tagsRaw = j['tags'];
+    final tags = tagsRaw is List
+        ? tagsRaw.map((e) => e.toString()).toList()
+        : <String>[];
+    return LibraryCard(
+      id: j['id'] as String? ?? '',
+      host: j['host'] as String? ?? '',
+      port: (j['port'] as num?)?.toInt() ?? 5900,
+      displayName: j['display_name'] as String?,
+      displayNumber: (j['display_number'] as num?)?.toInt(),
+      tags: tags,
+      lastConnectedAt: (j['last_connected_at'] as num?)?.toInt(),
+      thumbPath: j['thumb_path'] as String?,
+      username: j['username'] as String?,
+      preferVencrypt: j['prefer_vencrypt'] as bool? ?? false,
+      acceptInvalidCerts: j['accept_invalid_certs'] as bool? ?? false,
+      viewOnly: j['view_only'] as bool? ?? false,
+      notes: j['notes'] as String?,
+      openSessionId: openSessionId,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'host': host,
+        'port': port,
+        if (displayName != null) 'display_name': displayName,
+        if (displayNumber != null) 'display_number': displayNumber,
+        'tags': tags,
+        if (lastConnectedAt != null) 'last_connected_at': lastConnectedAt,
+        if (thumbPath != null) 'thumb_path': thumbPath,
+        if (username != null) 'username': username,
+        'prefer_vencrypt': preferVencrypt,
+        'accept_invalid_certs': acceptInvalidCerts,
+        'view_only': viewOnly,
+        if (notes != null) 'notes': notes,
+      };
+
+  String get searchHaystack => [
+        title,
+        host,
+        id,
+        '$port',
+        displayNumber?.toString() ?? '',
+        tags.join(' '),
+        username ?? '',
+        notes ?? '',
+      ].join('\n');
+}
+
+RegExp? tryParseSearchPattern(String query) {
+  final q = query.trim();
+  if (q.isEmpty) return null;
+  try {
+    return RegExp(q, caseSensitive: false);
+  } catch (_) {
+    return null;
+  }
+}
+
+bool matchesRegex(LibraryCard card, RegExp? pattern) {
+  if (pattern == null) return true;
+  return pattern.hasMatch(card.searchHaystack);
+}
+
+List<LibraryCard> filterLibraryCardsRegex(
+  Iterable<LibraryCard> cards,
+  String query,
+) {
+  final pattern = tryParseSearchPattern(query);
+  if (query.trim().isNotEmpty && pattern == null) return cards.toList();
+  return cards.where((c) => matchesRegex(c, pattern)).toList();
+}
+
+String exportEntryJson(LibraryCard card) {
+  return jsonEncode({'entries': {card.id: card.toJson()}});
+}
+
+String safeExportFilename(String id) =>
+    'helmhost-${id.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_')}.json';
+
 enum ViewScaleMode {
   fit,
   fill,
-  oneToOne,
 }
 
 extension ViewScaleModeX on ViewScaleMode {
+  /// Fit (aspect) = local letterbox only (TigerVNC FixedRatio / no RemoteResize).
+  /// Fill window = TigerVNC RemoteResize: remote FB matches viewport; paint 1:1 (never stretch).
   String get label {
     switch (this) {
       case ViewScaleMode.fit:
-        return 'Fit';
+        return 'Fit (aspect)';
       case ViewScaleMode.fill:
-        return 'Fill';
-      case ViewScaleMode.oneToOne:
-        return '1:1';
+        return 'Fill window';
     }
   }
 
-  /// BoxFit for Fit/Fill; null means 1:1 (no FittedBox scale).
-  BoxFit? get boxFit {
+  String get prefsKey {
     switch (this) {
       case ViewScaleMode.fit:
-        return BoxFit.contain;
+        return 'fit';
       case ViewScaleMode.fill:
-        return BoxFit.cover;
-      case ViewScaleMode.oneToOne:
-        return null;
+        return 'fill';
     }
   }
+
+  static ViewScaleMode fromPrefs(String? v) {
+    switch (v) {
+      case 'fill':
+      case 'oneToOne': // legacy → Fill window (RemoteResize)
+        return ViewScaleMode.fill;
+      default:
+        return ViewScaleMode.fit;
+    }
+  }
+
+  /// Local paint transform. Fill uses contain until remote size matches (never stretch).
+  BoxFit get boxFit {
+    switch (this) {
+      case ViewScaleMode.fit:
+      case ViewScaleMode.fill:
+        return BoxFit.contain;
+    }
+  }
+
+  bool get usesRemoteResize => this == ViewScaleMode.fill;
 }
+
+enum AuthNeed { none, password, usernamePassword }
+
+AuthNeed parseAuthNeed(String error) {
+  if (error.contains('NEED_USERNAME_PASSWORD')) {
+    return AuthNeed.usernamePassword;
+  }
+  if (error.contains('NEED_PASSWORD')) return AuthNeed.password;
+  return AuthNeed.none;
+}
+
+enum LibraryViewMode { grid, list }

@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod auth;
+pub mod encoding;
 pub mod factory;
 pub mod fb_cache;
 pub mod handshake;
@@ -12,6 +13,7 @@ pub mod session;
 pub mod vencrypt;
 pub mod zrle;
 
+pub use encoding::{encoding_name, preferred_encodings, RectAction};
 pub use factory::{connect_stream, RfbSessionFactory};
 pub use pixel_format::PixelFormat;
 pub use vencrypt::TlsOptions;

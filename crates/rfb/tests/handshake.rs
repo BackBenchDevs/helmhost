@@ -3,7 +3,7 @@
 use helmhost_rfb::auth::encrypt_challenge;
 use helmhost_rfb::handshake::{
     encode_client_init, encode_client_version, parse_security_result, parse_security_types,
-    parse_server_init, parse_version, pick_security, SEC_NONE, SEC_VNC_AUTH,
+    parse_server_init, parse_version, pick_security, SEC_NONE, SEC_UNIX_LOGIN, SEC_VNC_AUTH,
 };
 use helmhost_rfb::pixel_format::PixelFormat;
 
@@ -20,6 +20,12 @@ fn security_types_and_pick() {
     assert_eq!(types, vec![SEC_NONE, SEC_VNC_AUTH]);
     assert_eq!(pick_security(&types, false, false).unwrap(), SEC_NONE);
     assert_eq!(pick_security(&types, true, false).unwrap(), SEC_VNC_AUTH);
+}
+
+#[test]
+fn pick_unix_login_when_only_option() {
+    let types = vec![SEC_UNIX_LOGIN];
+    assert_eq!(pick_security(&types, false, false).unwrap(), SEC_UNIX_LOGIN);
 }
 
 #[test]

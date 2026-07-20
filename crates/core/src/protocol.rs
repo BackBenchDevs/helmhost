@@ -28,16 +28,23 @@ pub struct ConnectTarget {
 /// Credentials for a connect attempt. Never log `password`.
 #[derive(Clone, Default)]
 pub struct Creds {
+    pub username: Option<String>,
     pub password: Option<String>,
 }
 
 impl std::fmt::Debug for Creds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Creds")
+            .field("username", &self.username.as_ref().map(|_| "***"))
             .field("password", &self.password.as_ref().map(|_| "***"))
             .finish()
     }
 }
+
+/// Typed connect errors Flutter can map to auth dialogs.
+pub const NEED_PASSWORD: &str = "NEED_PASSWORD";
+pub const NEED_USERNAME_PASSWORD: &str = "NEED_USERNAME_PASSWORD";
+
 
 /// Damage / framebuffer rectangle (top-left origin).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +75,8 @@ pub enum SessionCommand {
     Key(KeyEvent),
     CutText(String),
     RequestUpdate { incremental: bool },
+    /// TigerVNC RemoteResize: request remote FB = w×h (ExtendedDesktopSize).
+    SetDesktopSize { w: u32, h: u32 },
     Close,
 }
 

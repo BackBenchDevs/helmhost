@@ -30,7 +30,9 @@ impl SessionFactory for MockFactory {
                             break;
                         }
                         SessionCommand::Pointer(_) | SessionCommand::Key(_) => {}
-                        SessionCommand::CutText(_) | SessionCommand::RequestUpdate { .. } => {}
+                        SessionCommand::CutText(_)
+                        | SessionCommand::RequestUpdate { .. }
+                        | SessionCommand::SetDesktopSize { .. } => {}
                     }
                 }
             });

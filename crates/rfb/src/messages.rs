@@ -3,16 +3,15 @@
 use crate::pixel_format::{raw_to_rgba, PixelFormat};
 use helmhost_core::{KeyEvent, PointerEvent, Rect};
 
+pub use crate::encoding::{
+    encoding_name, preferred_encodings, ENC_COPYRECT, ENC_DESKTOP_SIZE,
+    ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT, ENC_RAW, ENC_ZRLE,
+};
+
 pub const MSG_FRAMEBUFFER_UPDATE: u8 = 0;
 pub const MSG_SET_COLOUR_MAP: u8 = 1;
 pub const MSG_BELL: u8 = 2;
 pub const MSG_SERVER_CUT_TEXT: u8 = 3;
-
-pub const ENC_RAW: i32 = 0;
-pub const ENC_COPYRECT: i32 = 1;
-pub const ENC_ZRLE: i32 = 16;
-pub const ENC_DESKTOP_SIZE: i32 = -223;
-pub const ENC_LAST_RECT: i32 = -224;
 
 pub const CLIENT_SET_PIXEL_FORMAT: u8 = 0;
 pub const CLIENT_SET_ENCODINGS: u8 = 2;
@@ -20,6 +19,8 @@ pub const CLIENT_FB_UPDATE_REQUEST: u8 = 3;
 pub const CLIENT_KEY_EVENT: u8 = 4;
 pub const CLIENT_POINTER_EVENT: u8 = 5;
 pub const CLIENT_CUT_TEXT: u8 = 6;
+/// TigerVNC / RealVNC client → server SetDesktopSize (ExtendedDesktopSize).
+pub const CLIENT_SET_DESKTOP_SIZE: u8 = 251;
 
 pub fn encode_set_encodings(encodings: &[i32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + encodings.len() * 4);
@@ -30,11 +31,6 @@ pub fn encode_set_encodings(encodings: &[i32]) -> Vec<u8> {
         out.extend_from_slice(&e.to_be_bytes());
     }
     out
-}
-
-pub fn preferred_encodings() -> [i32; 1] {
-    // Raw only until binary FB snapshot paint path is proven.
-    [ENC_RAW]
 }
 
 pub fn encode_fb_update_request(incremental: bool, x: u16, y: u16, w: u16, h: u16) -> [u8; 10] {
@@ -82,6 +78,41 @@ pub fn encode_client_cut_text(text: &str) -> Vec<u8> {
     out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
     out.extend_from_slice(bytes);
     out
+}
+
+/// Client SetDesktopSize (msg 251): one virtual screen covering `width`×`height`.
+/// Wire layout matches TigerVNC `CMsgWriter::writeSetDesktopSize`.
+pub fn encode_set_desktop_size(width: u16, height: u16) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + 16);
+    out.push(CLIENT_SET_DESKTOP_SIZE);
+    out.push(0); // pad
+    out.extend_from_slice(&width.to_be_bytes());
+    out.extend_from_slice(&height.to_be_bytes());
+    out.push(1); // number of screens
+    out.push(0); // pad
+    // Screen: id, x, y, w, h, flags
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&width.to_be_bytes());
+    out.extend_from_slice(&height.to_be_bytes());
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out
+}
+
+#[cfg(test)]
+mod set_desktop_size_tests {
+    use super::*;
+
+    #[test]
+    fn encode_set_desktop_size_shape() {
+        let b = encode_set_desktop_size(1920, 1080);
+        assert_eq!(b[0], CLIENT_SET_DESKTOP_SIZE);
+        assert_eq!(u16::from_be_bytes([b[2], b[3]]), 1920);
+        assert_eq!(u16::from_be_bytes([b[4], b[5]]), 1080);
+        assert_eq!(b[6], 1);
+        assert_eq!(b.len(), 8 + 16);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

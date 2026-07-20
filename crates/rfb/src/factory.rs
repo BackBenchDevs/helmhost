@@ -36,6 +36,11 @@ impl RfbSessionFactory {
         self.prefer_vencrypt = yes;
         self
     }
+
+    pub fn configure_connect(&mut self, tls: TlsOptions, prefer_vencrypt: bool) {
+        self.tls = tls;
+        self.prefer_vencrypt = prefer_vencrypt;
+    }
 }
 
 impl Default for RfbSessionFactory {
