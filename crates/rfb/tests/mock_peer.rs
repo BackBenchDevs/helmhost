@@ -154,6 +154,7 @@ async fn live_rfb_optional() {
         .connect(
             ConnectTarget { host, port },
             Creds {
+                username: None,
                 password: std::env::var("HELMHOST_RFB_PASSWORD").ok(),
             },
         )

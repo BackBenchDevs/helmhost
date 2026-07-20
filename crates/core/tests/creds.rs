@@ -5,6 +5,7 @@ use helmhost_core::Creds;
 #[test]
 fn debug_redacts_password() {
     let creds = Creds {
+        username: Some("alice".into()),
         password: Some("s3cret-password".into()),
     };
     let rendered = format!("{creds:?}");
@@ -12,6 +13,7 @@ fn debug_redacts_password() {
         !rendered.contains("s3cret-password"),
         "Debug leaked password: {rendered}"
     );
+    assert!(!rendered.contains("alice"), "Debug leaked username: {rendered}");
     assert!(rendered.contains("***"));
 }
 

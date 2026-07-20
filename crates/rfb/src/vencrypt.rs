@@ -38,7 +38,10 @@ pub async fn negotiate_vencrypt_subtype<S: AsyncRead + AsyncWrite + Unpin>(
     let nbuf = read_exact(stream, 1).await?;
     let n = nbuf[0] as usize;
     if n == 0 {
-        return Err("VeNCrypt: zero subtypes".into());
+        return Err(
+            "VeNCrypt: server offered zero subtypes (try disabling Prefer VeNCrypt/TLS)"
+                .into(),
+        );
     }
     let raw = read_exact(stream, n * 4).await?;
     let mut subtypes = Vec::with_capacity(n);

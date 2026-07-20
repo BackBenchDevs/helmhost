@@ -5,7 +5,8 @@ use helmhost_rfb::fb_cache::FramebufferCache;
 use helmhost_rfb::messages::{
     apply_raw_rect, encode_client_cut_text, encode_fb_update_request, encode_key_event,
     encode_pointer_event, parse_fb_update_header, parse_rect_header, preferred_encodings,
-    FramebufferRectHeader, ENC_RAW, MSG_FRAMEBUFFER_UPDATE,
+    FramebufferRectHeader, ENC_COPYRECT, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT,
+    ENC_RAW, ENC_ZRLE, MSG_FRAMEBUFFER_UPDATE,
 };
 use helmhost_rfb::pixel_format::{raw_to_rgba, PixelFormat};
 use helmhost_rfb::zrle::decode_zrle;
@@ -78,7 +79,17 @@ fn pointer_and_key_encode() {
 
 #[test]
 fn preferred_encodings_order() {
-    assert_eq!(preferred_encodings(), [ENC_RAW]);
+    assert_eq!(
+        preferred_encodings(),
+        [
+            ENC_ZRLE,
+            ENC_RAW,
+            ENC_COPYRECT,
+            ENC_DESKTOP_SIZE,
+            ENC_EXTENDED_DESKTOP_SIZE,
+            ENC_LAST_RECT
+        ]
+    );
 }
 
 #[test]

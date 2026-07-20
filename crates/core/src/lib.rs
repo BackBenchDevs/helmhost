@@ -12,8 +12,11 @@ pub use fb_cache::FramebufferCache;
 pub use focus::InputFocus;
 pub use protocol::{
     BoxFuture, ConnectTarget, Creds, DEFAULT_QUEUE_CAPACITY, KeyEvent, PointerEvent, ProtocolId,
-    Rect, SessionCommand, SessionEvent, SessionFactory, SessionHandle,
+    Rect, SessionCommand, SessionEvent, SessionFactory, SessionHandle, NEED_PASSWORD,
+    NEED_USERNAME_PASSWORD,
 };
-pub use registry::{ConnectionEntry, ConnectionRegistry};
+pub use registry::{
+    display_from_port, port_from_display, ConnectionEntry, ConnectionRegistry,
+};
 pub use runtime::HelmRuntime;
 pub use session::{SessionId, SessionManager};

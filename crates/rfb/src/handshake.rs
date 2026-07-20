@@ -10,6 +10,8 @@ pub const RFB_003_008: &[u8] = b"RFB 003.008\n";
 pub const SEC_NONE: u8 = 1;
 pub const SEC_VNC_AUTH: u8 = 2;
 pub const SEC_VENCRYPT: u8 = 19;
+/// Tight-style Unix Login (username + password).
+pub const SEC_UNIX_LOGIN: u8 = 129;
 pub const SEC_RESULT_OK: u32 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +64,9 @@ pub fn pick_security(types: &[u8], have_password: bool, allow_vencrypt: bool) ->
     }
     if types.contains(&SEC_VNC_AUTH) {
         return Ok(SEC_VNC_AUTH);
+    }
+    if types.contains(&SEC_UNIX_LOGIN) {
+        return Ok(SEC_UNIX_LOGIN);
     }
     Err(format!("no supported security in {types:?}"))
 }
@@ -136,7 +141,14 @@ pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
     let types = parse_security_types(&full)?;
 
     let have_pw = creds.password.as_ref().is_some_and(|p| !p.is_empty());
+    let have_user = creds.username.as_ref().is_some_and(|u| !u.is_empty());
     let sec = pick_security(&types, have_pw, prefer_vencrypt)?;
+    if sec == SEC_VNC_AUTH && !have_pw {
+        return Err(helmhost_core::NEED_PASSWORD.to_string());
+    }
+    if sec == SEC_UNIX_LOGIN && (!have_user || !have_pw) {
+        return Err(helmhost_core::NEED_USERNAME_PASSWORD.to_string());
+    }
     write_all(stream, &[sec]).await?;
 
     if sec == SEC_VENCRYPT {
@@ -157,8 +169,13 @@ pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
             let pw = creds
                 .password
                 .as_deref()
-                .ok_or_else(|| "password required for VNC Auth".to_string())?;
+                .ok_or_else(|| helmhost_core::NEED_PASSWORD.to_string())?;
             vnc_auth_exchange(stream, pw).await?;
+        }
+        SEC_UNIX_LOGIN => {
+            // Auth exchange for Unix Login is not implemented yet; typed need
+            // already surfaced above so the UI can collect username+password.
+            return Err("Unix Login auth not yet implemented".into());
         }
         other => return Err(format!("unsupported security {other}")),
     }

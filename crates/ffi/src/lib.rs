@@ -8,14 +8,31 @@ use helmhost_core::{
     SessionCommand, SessionEvent, SessionHandle, SessionId, SessionManager,
 };
 use helmhost_rfb::RfbSessionFactory;
+use helmhost_rfb::TlsOptions;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, Once};
 use tokio::runtime::Runtime;
+use tracing_subscriber::EnvFilter;
+
+static LOG_INIT: Once = Once::new();
+
+fn init_logging() {
+    LOG_INIT.call_once(|| {
+        let filter = EnvFilter::try_from_env("HELMHOST_LOG")
+            .or_else(|_| EnvFilter::try_from_default_env())
+            .unwrap_or_else(|_| EnvFilter::new("info"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(true)
+            .try_init();
+        tracing::info!("helmhost-ffi logging initialized");
+    });
+}
 
 static RT: Lazy<Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -122,6 +139,7 @@ pub extern "C" fn hh_string_free(s: *mut c_char) {
 
 #[no_mangle]
 pub extern "C" fn hh_hello() -> *mut c_char {
+    init_logging();
     ok_cstr(hello())
 }
 
@@ -129,11 +147,24 @@ pub extern "C" fn hh_hello() -> *mut c_char {
 pub extern "C" fn hh_connect(
     host: *const c_char,
     port: u16,
+    username: *const c_char,
     password: *const c_char,
+    prefer_vencrypt: u8,
+    accept_invalid_certs: u8,
 ) -> *mut c_char {
+    init_logging();
     let host = match cstr_to_string(host) {
         Ok(h) => h,
         Err(e) => return err_cstr(e),
+    };
+    let username = if username.is_null() {
+        None
+    } else {
+        match cstr_to_string(username) {
+            Ok(u) if u.is_empty() => None,
+            Ok(u) => Some(u),
+            Err(e) => return err_cstr(e),
+        }
     };
     let password = if password.is_null() {
         None
@@ -144,9 +175,23 @@ pub extern "C" fn hh_connect(
             Err(e) => return err_cstr(e),
         }
     };
+    let tls = TlsOptions {
+        danger_accept_invalid_certs: accept_invalid_certs != 0,
+    };
+    let prefer = prefer_vencrypt != 0;
+    tracing::info!(
+        %host,
+        port,
+        prefer_vencrypt = prefer,
+        accept_invalid_certs = accept_invalid_certs != 0,
+        "hh_connect start"
+    );
 
     let result = RT.block_on(async {
         let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
+        state
+            .factory
+            .configure_connect(tls, prefer);
         use helmhost_core::SessionFactory;
         let handle = state
             .factory
@@ -155,20 +200,30 @@ pub extern "C" fn hh_connect(
                     host: host.clone(),
                     port,
                 },
-                Creds { password },
+                Creds {
+                    username,
+                    password,
+                },
             )
             .await?;
         let id = handle.id.0;
         state.manager.insert(handle.id, handle.commands.clone());
         state.sessions.insert(id, handle);
-        // upsert registry entry
         let entry_id = format!("{host}:{port}");
-        state.registry.upsert(ConnectionEntry {
-            id: entry_id,
-            host,
-            port,
-            display_name: None,
+        let prev = state.registry.get(&entry_id).cloned();
+        let mut entry = prev.unwrap_or_else(|| {
+            ConnectionEntry::new(entry_id.clone(), host.clone(), port)
         });
+        entry.host = host.clone();
+        entry.port = port;
+        entry.last_connected_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        );
+        entry.display_number = helmhost_core::display_from_port(port);
+        state.registry.upsert(entry);
         if let Some(path) = state.registry_path.clone() {
             let _ = state.registry.save_to_path(&path);
         }
@@ -176,8 +231,14 @@ pub extern "C" fn hh_connect(
     });
 
     match result {
-        Ok(id) => ok_cstr(id.to_string()),
-        Err(e) => err_cstr(e),
+        Ok(id) => {
+            tracing::info!(session_id = id, %host, port, "hh_connect ok");
+            ok_cstr(id.to_string())
+        }
+        Err(e) => {
+            tracing::error!(%host, port, error = %e, "hh_connect failed");
+            err_cstr(e)
+        }
     }
 }
 
@@ -269,6 +330,27 @@ pub extern "C" fn hh_send_key(session_id: u64, down: u8, keysym: u32) -> *mut c_
 }
 
 #[no_mangle]
+pub extern "C" fn hh_send_clipboard(session_id: u64, text: *const c_char) -> *mut c_char {
+    let Ok(s) = cstr_to_string(text) else {
+        return err_cstr("bad clipboard text");
+    };
+    send_cmd(session_id, SessionCommand::CutText(s))
+}
+
+/// Request remote desktop resize (TigerVNC RemoteResize / SetDesktopSize).
+/// Does not require input focus — matches viewer window resize behavior.
+#[no_mangle]
+pub extern "C" fn hh_request_desktop_size(session_id: u64, w: u32, h: u32) -> *mut c_char {
+    if w == 0 || h == 0 {
+        return err_cstr("invalid desktop size");
+    }
+    send_cmd_unfocused(
+        session_id,
+        SessionCommand::SetDesktopSize { w, h },
+    )
+}
+
+#[no_mangle]
 pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
     let result = RT.block_on(async {
         let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
@@ -290,6 +372,20 @@ fn send_cmd(session_id: u64, cmd: SessionCommand) -> *mut c_char {
         if !state.focus.allows(SessionId(session_id)) {
             return Err("focus not grabbed".to_string());
         }
+        let Some(handle) = state.sessions.get(&session_id) else {
+            return Err("unknown session".to_string());
+        };
+        handle.send(cmd).await
+    });
+    match result {
+        Ok(()) => ok_cstr("ok"),
+        Err(e) => err_cstr(e),
+    }
+}
+
+fn send_cmd_unfocused(session_id: u64, cmd: SessionCommand) -> *mut c_char {
+    let result = RT.block_on(async {
+        let state = STATE.lock().map_err(|_| "lock".to_string())?;
         let Some(handle) = state.sessions.get(&session_id) else {
             return Err("unknown session".to_string());
         };
@@ -386,21 +482,108 @@ pub extern "C" fn hh_registry_upsert(
     let display_name = if display_name.is_null() {
         None
     } else {
-        cstr_to_string(display_name).ok()
+        cstr_to_string(display_name).ok().filter(|s| !s.is_empty())
     };
     match STATE.lock() {
         Ok(mut s) => {
-            s.registry.upsert(ConnectionEntry {
-                id,
-                host,
-                port,
-                display_name,
-            });
+            let prev = s.registry.get(&id).cloned();
+            let mut entry = ConnectionEntry::new(id, host, port);
+            entry.display_name = display_name.or_else(|| prev.as_ref().and_then(|p| p.display_name.clone()));
+            entry.display_number = helmhost_core::display_from_port(port)
+                .or_else(|| prev.as_ref().and_then(|p| p.display_number));
+            entry.tags = prev.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
+            entry.last_connected_at = prev.as_ref().and_then(|p| p.last_connected_at);
+            entry.thumb_path = prev.as_ref().and_then(|p| p.thumb_path.clone());
+            entry.username = prev.as_ref().and_then(|p| p.username.clone());
+            entry.prefer_vencrypt = prev.as_ref().map(|p| p.prefer_vencrypt).unwrap_or(false);
+            entry.accept_invalid_certs = prev
+                .as_ref()
+                .map(|p| p.accept_invalid_certs)
+                .unwrap_or(false);
+            entry.view_only = prev.as_ref().map(|p| p.view_only).unwrap_or(false);
+            entry.notes = prev.as_ref().and_then(|p| p.notes.clone());
+            s.registry.upsert(entry);
             if let Some(path) = s.registry_path.clone() {
                 let _ = s.registry.save_to_path(&path);
             }
             ok_cstr("ok")
         }
+        Err(_) => err_cstr("lock"),
+    }
+}
+
+/// Upsert a full [`ConnectionEntry`] from JSON (no secrets).
+#[no_mangle]
+pub extern "C" fn hh_registry_upsert_json(json: *const c_char) -> *mut c_char {
+    let raw = match cstr_to_string(json) {
+        Ok(v) => v,
+        Err(e) => return err_cstr(e),
+    };
+    let entry: ConnectionEntry = match serde_json::from_str(&raw) {
+        Ok(e) => e,
+        Err(e) => return err_cstr(e.to_string()),
+    };
+    match STATE.lock() {
+        Ok(mut s) => {
+            s.registry.upsert(entry);
+            if let Some(path) = s.registry_path.clone() {
+                let _ = s.registry.save_to_path(&path);
+            }
+            ok_cstr("ok")
+        }
+        Err(_) => err_cstr("lock"),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hh_registry_remove(id: *const c_char) -> *mut c_char {
+    let id = match cstr_to_string(id) {
+        Ok(v) => v,
+        Err(e) => return err_cstr(e),
+    };
+    match STATE.lock() {
+        Ok(mut s) => {
+            s.registry.remove(&id);
+            if let Some(path) = s.registry_path.clone() {
+                let _ = s.registry.save_to_path(&path);
+            }
+            ok_cstr("ok")
+        }
+        Err(_) => err_cstr("lock"),
+    }
+}
+
+/// Merge a full registry JSON document (export format).
+#[no_mangle]
+pub extern "C" fn hh_registry_merge_json(json: *const c_char) -> *mut c_char {
+    let raw = match cstr_to_string(json) {
+        Ok(v) => v,
+        Err(e) => return err_cstr(e),
+    };
+    let other = match ConnectionRegistry::from_json(&raw) {
+        Ok(r) => r,
+        Err(e) => return err_cstr(e),
+    };
+    match STATE.lock() {
+        Ok(mut s) => {
+            s.registry.merge_from(other);
+            if let Some(path) = s.registry_path.clone() {
+                let _ = s.registry.save_to_path(&path);
+            }
+            ok_cstr("ok")
+        }
+        Err(_) => err_cstr("lock"),
+    }
+}
+
+/// Export full registry JSON (no secrets stored).
+#[no_mangle]
+pub extern "C" fn hh_registry_export() -> *mut c_char {
+    match STATE.lock() {
+        Ok(s) => match s.registry.to_json() {
+            Ok(j) => ok_cstr(j),
+            Err(e) => err_cstr(e),
+        },
         Err(_) => err_cstr("lock"),
     }
 }

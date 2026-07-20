@@ -1,5 +1,6 @@
 //! Async RFB session: handshake then reader + writer tasks on command/event queues.
 
+use crate::encoding::{rect_fits_framebuffer, encoding_name, RectAction};
 use crate::handshake::{
     finish_client_server_init, handshake_security_and_init, parse_security_result,
     vnc_auth_exchange, ServerInit, SEC_NONE, SEC_VENCRYPT, SEC_VNC_AUTH,
@@ -7,17 +8,18 @@ use crate::handshake::{
 use crate::io::{read_exact, write_all};
 use crate::messages::{
     decode_raw_rect, encode_client_cut_text, encode_fb_update_request, encode_key_event,
-    encode_pointer_event, encode_set_encodings, encode_set_pixel_format, parse_fb_update_header,
-    parse_rect_header, parse_server_cut_text, preferred_encodings, ENC_COPYRECT, ENC_DESKTOP_SIZE,
-    ENC_LAST_RECT, ENC_RAW, ENC_ZRLE, MSG_BELL, MSG_FRAMEBUFFER_UPDATE, MSG_SERVER_CUT_TEXT,
-    MSG_SET_COLOUR_MAP,
+    encode_pointer_event, encode_set_desktop_size, encode_set_encodings, encode_set_pixel_format,
+    parse_copyrect_src, parse_fb_update_header, parse_rect_header, parse_server_cut_text,
+    preferred_encodings, ENC_COPYRECT, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT,
+    ENC_RAW, ENC_ZRLE, MSG_BELL, MSG_FRAMEBUFFER_UPDATE, MSG_SERVER_CUT_TEXT, MSG_SET_COLOUR_MAP,
 };
 use crate::pixel_format::PixelFormat;
 use crate::vencrypt::{
     negotiate_vencrypt_subtype, wrap_tcp_tls, TlsOptions, VENCRYPT_TLSNONE, VENCRYPT_TLSVNC,
 };
+use crate::zrle::{decode_zrle_with, ZrleStream};
 use helmhost_core::{
-    Creds, FramebufferCache, SessionCommand, SessionEvent, SessionHandle, SessionId,
+    Creds, FramebufferCache, Rect, SessionCommand, SessionEvent, SessionHandle, SessionId,
     DEFAULT_QUEUE_CAPACITY,
 };
 use std::sync::{Arc, Mutex as StdMutex};
@@ -59,7 +61,22 @@ pub async fn connect_tcp(
     let stream = TcpStream::connect(&addr)
         .await
         .map_err(|e| format!("connect {addr}: {e}"))?;
-    connect_stream(id, stream, host, creds, tls, prefer_vencrypt).await
+    match connect_stream(id, stream, host, creds.clone(), tls.clone(), prefer_vencrypt).await {
+        Ok(handle) => Ok(handle),
+        Err(e) if prefer_vencrypt && is_vencrypt_fallback_error(&e) => {
+            let stream = TcpStream::connect(&addr)
+                .await
+                .map_err(|re| format!("connect {addr} (fallback): {re}"))?;
+            connect_stream(id, stream, host, creds, tls, false)
+                .await
+                .map_err(|e2| format!("{e}; classic fallback failed: {e2}"))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn is_vencrypt_fallback_error(err: &str) -> bool {
+    err.contains("zero subtypes") || err.contains("no supported subtype")
 }
 
 /// Handshake over an existing TCP stream (tests / tunnels).
@@ -98,7 +115,7 @@ async fn connect_vencrypt(
             let pw = creds
                 .password
                 .as_deref()
-                .ok_or_else(|| "password required for TLSVnc".to_string())?;
+                .ok_or_else(|| helmhost_core::NEED_PASSWORD.to_string())?;
             vnc_auth_exchange(&mut tls_stream, pw).await?;
             let result = read_exact(&mut tls_stream, 4).await?;
             parse_security_result(&result)?;
@@ -150,6 +167,12 @@ where
     )
     .await?;
     write_all(&mut stream, &encode_set_encodings(&preferred_encodings())).await?;
+    tracing::info!(
+        width = init.width,
+        height = init.height,
+        encodings = ?preferred_encodings(),
+        "rfb encodings advertised"
+    );
 
     let mut desktop = SharedDesktop::new(init.width, init.height, init.pixel_format);
     desktop.pixel_format = PixelFormat::rgb888_le();
@@ -223,6 +246,15 @@ async fn writer_loop<W: AsyncWrite + Unpin>(
                 drop(g);
                 write_all(wr, &msg).await
             }
+            SessionCommand::SetDesktopSize { w, h } => {
+                let width = u16::try_from(w).unwrap_or(u16::MAX);
+                let height = u16::try_from(h).unwrap_or(u16::MAX);
+                if width == 0 || height == 0 {
+                    Ok(())
+                } else {
+                    write_all(wr, &encode_set_desktop_size(width, height)).await
+                }
+            }
         };
         if result.is_err() {
             break;
@@ -236,6 +268,8 @@ async fn reader_loop<R: AsyncRead + Unpin>(
     cmd_tx: mpsc::Sender<SessionCommand>,
     state: Arc<Mutex<SharedDesktop>>,
 ) -> Result<(), String> {
+    // RFC 6143: one zlib stream for all ZRLE rectangles on this connection.
+    let mut zrle = ZrleStream::new();
     loop {
         let mut typ = [0u8; 1];
         match rd.read_exact(&mut typ).await {
@@ -250,8 +284,14 @@ async fn reader_loop<R: AsyncRead + Unpin>(
                 let mut hdr = vec![MSG_FRAMEBUFFER_UPDATE];
                 hdr.extend_from_slice(&rest);
                 let (nrects, _) = parse_fb_update_header(&hdr)?;
-                for _ in 0..nrects {
-                    handle_rect(rd, &ev_tx, &state).await?;
+                // TigerVNC: LastRect ends the update early (nRects may be 0xFFFF).
+                let mut remaining = nrects;
+                while remaining > 0 {
+                    remaining -= 1;
+                    match handle_rect(rd, &ev_tx, &state, &mut zrle).await? {
+                        RectAction::Continue => {}
+                        RectAction::EndFramebufferUpdate => break,
+                    }
                 }
                 let _ = cmd_tx
                     .send(SessionCommand::RequestUpdate { incremental: true })
@@ -287,9 +327,16 @@ async fn handle_rect<R: AsyncRead + Unpin>(
     rd: &mut R,
     ev_tx: &mpsc::Sender<SessionEvent>,
     state: &Arc<Mutex<SharedDesktop>>,
-) -> Result<(), String> {
+    zrle: &mut ZrleStream,
+) -> Result<RectAction, String> {
     let rh = read_exact(rd, 12).await?;
     let (hdr, _) = parse_rect_header(&rh)?;
+
+    {
+        let g = state.lock().await;
+        rect_fits_framebuffer(g.width, g.height, &hdr)?;
+    }
+
     match hdr.encoding {
         ENC_RAW => {
             let bpp = {
@@ -306,16 +353,70 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 .put_damage(rect, &rgba)?;
             drop(g);
             send_event(ev_tx, SessionEvent::FramebufferDirty { rect }).await;
+            Ok(RectAction::Continue)
         }
         ENC_COPYRECT => {
-            let _ = read_exact(rd, 4).await?;
-            return Err("server sent CopyRect; client advertises Raw only".into());
+            let src = read_exact(rd, 4).await?;
+            let (sx, sy) = parse_copyrect_src(&src)?;
+            let rect = Rect {
+                x: i32::from(hdr.x),
+                y: i32::from(hdr.y),
+                w: u32::from(hdr.w),
+                h: u32::from(hdr.h),
+            };
+            let g = state.lock().await;
+            g.cache
+                .lock()
+                .map_err(|_| "fb cache lock".to_string())?
+                .copy_rect(rect, i32::from(sx), i32::from(sy))?;
+            drop(g);
+            send_event(ev_tx, SessionEvent::FramebufferDirty { rect }).await;
+            Ok(RectAction::Continue)
         }
         ENC_ZRLE => {
             let lenb = read_exact(rd, 4).await?;
             let zlen = u32::from_be_bytes([lenb[0], lenb[1], lenb[2], lenb[3]]) as usize;
-            let _ = read_exact(rd, zlen).await?;
-            return Err("server sent ZRLE; client advertises Raw only".into());
+            let zdata = read_exact(rd, zlen).await?;
+            let mut framed = lenb;
+            framed.extend_from_slice(&zdata);
+            // Zero-area: still consume zlib length + payload to keep stream aligned.
+            if hdr.w == 0 || hdr.h == 0 {
+                let pf = {
+                    let g = state.lock().await;
+                    g.pixel_format
+                };
+                decode_zrle_with(zrle, &pf, 0, 0, &framed)
+                    .map_err(|e| format!("zrle decode failed: {e}"))?;
+                return Ok(RectAction::Continue);
+            }
+            let g = state.lock().await;
+            match decode_zrle_with(
+                zrle,
+                &g.pixel_format,
+                u32::from(hdr.w),
+                u32::from(hdr.h),
+                &framed,
+            ) {
+                Ok(rgba) => {
+                    let rect = Rect {
+                        x: i32::from(hdr.x),
+                        y: i32::from(hdr.y),
+                        w: u32::from(hdr.w),
+                        h: u32::from(hdr.h),
+                    };
+                    g.cache
+                        .lock()
+                        .map_err(|_| "fb cache lock".to_string())?
+                        .put_damage(rect, &rgba)?;
+                    drop(g);
+                    send_event(ev_tx, SessionEvent::FramebufferDirty { rect }).await;
+                    Ok(RectAction::Continue)
+                }
+                Err(e) => {
+                    drop(g);
+                    Err(format!("zrle decode failed: {e}"))
+                }
+            }
         }
         ENC_DESKTOP_SIZE => {
             let mut g = state.lock().await;
@@ -329,15 +430,45 @@ async fn handle_rect<R: AsyncRead + Unpin>(
             let h = u32::from(hdr.h);
             drop(g);
             send_event(ev_tx, SessionEvent::DesktopResize { w, h }).await;
+            Ok(RectAction::Continue)
         }
-        ENC_LAST_RECT => {}
+        ENC_EXTENDED_DESKTOP_SIZE => {
+            // Payload: number-of-screens (u8) + pad3 + screens×16.
+            // Rect x = reason, y = result (TigerVNC); w/h = new size.
+            let n_pad = read_exact(rd, 4).await?;
+            let n_screens = n_pad[0] as usize;
+            let _ = read_exact(rd, n_screens * 16).await?;
+            let reason = hdr.x;
+            let result = hdr.y;
+            // reasonClient == 1: only apply size when result == 0 (success).
+            const REASON_CLIENT: u16 = 1;
+            if reason == REASON_CLIENT && result != 0 {
+                return Ok(RectAction::Continue);
+            }
+            let mut g = state.lock().await;
+            g.width = hdr.w;
+            g.height = hdr.h;
+            g.cache
+                .lock()
+                .map_err(|_| "fb cache lock".to_string())?
+                .resize(u32::from(hdr.w), u32::from(hdr.h));
+            let w = u32::from(hdr.w);
+            let h = u32::from(hdr.h);
+            drop(g);
+            send_event(ev_tx, SessionEvent::DesktopResize { w, h }).await;
+            Ok(RectAction::Continue)
+        }
+        ENC_LAST_RECT => Ok(RectAction::EndFramebufferUpdate),
         other => {
             if hdr.w == 0 || hdr.h == 0 {
                 // Zero-area unknown encoding: no payload to skip
+                Ok(RectAction::Continue)
             } else {
-                return Err(format!("unknown encoding {other}"));
+                Err(format!(
+                    "unknown encoding {other} ({})",
+                    encoding_name(other)
+                ))
             }
         }
     }
-    Ok(())
 }
