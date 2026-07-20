@@ -32,8 +32,9 @@ pub fn encode_set_encodings(encodings: &[i32]) -> Vec<u8> {
     out
 }
 
-pub fn preferred_encodings() -> [i32; 3] {
-    [ENC_ZRLE, ENC_COPYRECT, ENC_RAW]
+pub fn preferred_encodings() -> [i32; 1] {
+    // Raw only until binary FB snapshot paint path is proven.
+    [ENC_RAW]
 }
 
 pub fn encode_fb_update_request(incremental: bool, x: u16, y: u16, w: u16, h: u16) -> [u8; 10] {

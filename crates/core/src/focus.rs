@@ -33,4 +33,9 @@ impl InputFocus {
     pub fn is_grabbed(&self) -> bool {
         matches!(self, Self::Grabbed(_))
     }
+
+    /// True when this session currently holds input focus.
+    pub fn allows(&self, id: SessionId) -> bool {
+        matches!(self, Self::Grabbed(g) if *g == id)
+    }
 }

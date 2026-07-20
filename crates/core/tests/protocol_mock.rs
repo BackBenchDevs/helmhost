@@ -1,9 +1,10 @@
 //! Public-API tests for async protocol traits via mocks.
 
 use helmhost_core::{
-    ConnectTarget, Creds, ProtocolId, SessionCommand, SessionEvent, SessionFactory, SessionHandle,
-    SessionId, BoxFuture,
+    ConnectTarget, Creds, FramebufferCache, ProtocolId, SessionCommand, SessionEvent,
+    SessionFactory, SessionHandle, SessionId, BoxFuture,
 };
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 struct MockFactory;
@@ -39,6 +40,7 @@ impl SessionFactory for MockFactory {
                 height: 480,
                 events: ev_rx,
                 commands: cmd_tx,
+                framebuffer: Arc::new(Mutex::new(FramebufferCache::new(640, 480))),
             })
         })
     }

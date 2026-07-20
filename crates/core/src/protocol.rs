@@ -1,8 +1,10 @@
 //! Protocol-agnostic async session API (command / event queues).
 
+use crate::fb_cache::FramebufferCache;
 use crate::session::SessionId;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 /// Boxed async future used by [`SessionFactory::connect`].
@@ -73,7 +75,8 @@ pub enum SessionCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     DesktopResize { w: u32, h: u32 },
-    Damage { rect: Rect, rgba: Vec<u8> },
+    /// Framebuffer region changed; pixels live in [`SessionHandle::framebuffer`].
+    FramebufferDirty { rect: Rect },
     Bell,
     Clipboard(String),
     Disconnected,
@@ -81,7 +84,7 @@ pub enum SessionEvent {
 }
 
 /// Default bound for per-session command / event queues.
-pub const DEFAULT_QUEUE_CAPACITY: usize = 64;
+pub const DEFAULT_QUEUE_CAPACITY: usize = 256;
 
 /// Handle returned after a successful async connect.
 pub struct SessionHandle {
@@ -90,6 +93,8 @@ pub struct SessionHandle {
     pub height: u32,
     pub events: mpsc::Receiver<SessionEvent>,
     pub commands: mpsc::Sender<SessionCommand>,
+    /// Shared RGBA8 cache; FFI pulls snapshots via `copy_to`.
+    pub framebuffer: Arc<Mutex<FramebufferCache>>,
 }
 
 impl SessionHandle {

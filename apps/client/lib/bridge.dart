@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -30,6 +31,10 @@ typedef _UpsertNative = Pointer<Utf8> Function(
     Pointer<Utf8>, Pointer<Utf8>, Uint16, Pointer<Utf8>);
 typedef _UpsertDart = Pointer<Utf8> Function(
     Pointer<Utf8>, Pointer<Utf8>, int, Pointer<Utf8>);
+typedef _FbSizeNative = Int32 Function(Uint64, Pointer<Uint32>, Pointer<Uint32>);
+typedef _FbSizeDart = int Function(int, Pointer<Uint32>, Pointer<Uint32>);
+typedef _FbCopyNative = Int32 Function(Uint64, Pointer<Uint8>, IntPtr);
+typedef _FbCopyDart = int Function(int, Pointer<Uint8>, int);
 
 /// Native bridge to `helmhost-ffi` (C ABI; FRB-ready `hello` surface).
 class HelmBridge {
@@ -53,7 +58,9 @@ class HelmBridge {
         _regList =
             _lib.lookupFunction<_VoidNative, _VoidDart>('hh_registry_list'),
         _regUpsert = _lib
-            .lookupFunction<_UpsertNative, _UpsertDart>('hh_registry_upsert');
+            .lookupFunction<_UpsertNative, _UpsertDart>('hh_registry_upsert'),
+        _fbSize = _lib.lookupFunction<_FbSizeNative, _FbSizeDart>('hh_fb_size'),
+        _fbCopy = _lib.lookupFunction<_FbCopyNative, _FbCopyDart>('hh_fb_copy');
 
   // Keep library alive for the process lifetime.
   // ignore: unused_field
@@ -71,6 +78,8 @@ class HelmBridge {
   final _PathDart _regPath;
   final _VoidDart _regList;
   final _UpsertDart _regUpsert;
+  final _FbSizeDart _fbSize;
+  final _FbCopyDart _fbCopy;
 
   static HelmBridge open() {
     final name = Platform.isMacOS
@@ -78,15 +87,16 @@ class HelmBridge {
         : Platform.isWindows
             ? 'helmhost_ffi.dll'
             : 'libhelmhost_ffi.so';
+
     final candidates = <String>[
+      if (Platform.environment['HELMHOST_FFI'] case final env?
+          when env.isNotEmpty)
+        env,
+      '${File(Platform.resolvedExecutable).parent.path}/$name',
+      '${File(Platform.resolvedExecutable).parent.path}/../Frameworks/$name',
       name,
-      '../target/debug/$name',
-      '../target/release/$name',
-      '../../target/debug/$name',
-      '../../target/release/$name',
-      '${Directory.current.path}/../../target/debug/$name',
-      '${Directory.current.path}/../../target/release/$name',
     ];
+
     Object? last;
     for (final path in candidates) {
       try {
@@ -95,7 +105,9 @@ class HelmBridge {
         last = e;
       }
     }
-    throw StateError('Failed to load $name: $last');
+    throw StateError(
+      'Failed to load $name (build with scripts/build_client.sh first): $last',
+    );
   }
 
   String _take(Pointer<Utf8> p) {
@@ -137,6 +149,32 @@ class HelmBridge {
     final r = _take(_poll(sessionId));
     if (r.startsWith('ERR:')) throw StateError(r);
     return jsonDecode(r) as Map<String, dynamic>;
+  }
+
+  (int, int) fbSize(int sessionId) {
+    final w = malloc<Uint32>();
+    final h = malloc<Uint32>();
+    try {
+      final rc = _fbSize(sessionId, w, h);
+      if (rc != 0) throw StateError('hh_fb_size failed');
+      return (w.value, h.value);
+    } finally {
+      malloc.free(w);
+      malloc.free(h);
+    }
+  }
+
+  Uint8List fbCopy(int sessionId, int width, int height) {
+    final len = width * height * 4;
+    if (len <= 0) throw StateError('invalid fb size');
+    final buf = malloc<Uint8>(len);
+    try {
+      final rc = _fbCopy(sessionId, buf, len);
+      if (rc != 0) throw StateError('hh_fb_copy failed');
+      return Uint8List.fromList(buf.asTypedList(len));
+    } finally {
+      malloc.free(buf);
+    }
   }
 
   void sendPointer(int sessionId, int x, int y, int buttons) {

@@ -5,7 +5,7 @@ use helmhost_rfb::fb_cache::FramebufferCache;
 use helmhost_rfb::messages::{
     apply_raw_rect, encode_client_cut_text, encode_fb_update_request, encode_key_event,
     encode_pointer_event, parse_fb_update_header, parse_rect_header, preferred_encodings,
-    FramebufferRectHeader, ENC_COPYRECT, ENC_RAW, ENC_ZRLE, MSG_FRAMEBUFFER_UPDATE,
+    FramebufferRectHeader, ENC_RAW, MSG_FRAMEBUFFER_UPDATE,
 };
 use helmhost_rfb::pixel_format::{raw_to_rgba, PixelFormat};
 use helmhost_rfb::zrle::decode_zrle;
@@ -78,7 +78,7 @@ fn pointer_and_key_encode() {
 
 #[test]
 fn preferred_encodings_order() {
-    assert_eq!(preferred_encodings(), [ENC_ZRLE, ENC_COPYRECT, ENC_RAW]);
+    assert_eq!(preferred_encodings(), [ENC_RAW]);
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn copyrect_via_cache() {
             &red,
         )
         .unwrap();
-    let copied = cache
+    cache
         .copy_rect(
             Rect {
                 x: 2,
@@ -108,7 +108,57 @@ fn copyrect_via_cache() {
             0,
         )
         .unwrap();
-    assert_eq!(copied, red);
+    let mut out = vec![0u8; cache.byte_len()];
+    cache.copy_to(&mut out).unwrap();
+    // Row 0: red, red, red, red (first 16 bytes of two copied pixels at x=2)
+    assert_eq!(&out[8..16], &red[..]);
+}
+
+#[test]
+fn fb_copy_solid_color() {
+    let mut cache = FramebufferCache::new(2, 2);
+    let blue = vec![0u8, 0, 255, 255];
+    for y in 0..2 {
+        for x in 0..2 {
+            cache
+                .put_damage(
+                    Rect {
+                        x,
+                        y,
+                        w: 1,
+                        h: 1,
+                    },
+                    &blue,
+                )
+                .unwrap();
+        }
+    }
+    let mut out = vec![0u8; 16];
+    cache.copy_to(&mut out).unwrap();
+    assert_eq!(&out[0..4], &blue[..]);
+    assert_eq!(&out[12..16], &blue[..]);
+}
+
+#[test]
+fn fb_copy_short_buffer_errors() {
+    let cache = FramebufferCache::new(2, 2);
+    let mut short = vec![0u8; 8];
+    assert!(cache.copy_to(&mut short).is_err());
+}
+
+#[test]
+fn put_damage_short_rgba_errors() {
+    let mut cache = FramebufferCache::new(2, 2);
+    let err = cache.put_damage(
+        Rect {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        },
+        &[1, 2, 3],
+    );
+    assert!(err.is_err());
 }
 
 #[test]

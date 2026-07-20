@@ -42,6 +42,19 @@ fn grab_replaces_previous_session() {
 }
 
 #[test]
+fn allows_only_grabbed_session() {
+    let mut focus = InputFocus::Released;
+    let a = SessionId(1);
+    let b = SessionId(2);
+    assert!(!focus.allows(a));
+    focus.grab(a);
+    assert!(focus.allows(a));
+    assert!(!focus.allows(b));
+    focus.release();
+    assert!(!focus.allows(a));
+}
+
+#[test]
 fn release_when_already_released_is_idempotent() {
     let mut focus = InputFocus::Released;
     focus.release();
