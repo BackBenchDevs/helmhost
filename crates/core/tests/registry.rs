@@ -54,3 +54,12 @@ fn display_name_round_trip() {
         Some("Lab PC")
     );
 }
+
+#[test]
+fn json_round_trip_persistence() {
+    let mut reg = ConnectionRegistry::new();
+    reg.upsert(entry("a", "127.0.0.1", 5900));
+    let json = reg.to_json().unwrap();
+    let loaded = ConnectionRegistry::from_json(&json).unwrap();
+    assert_eq!(loaded.get("a").map(|e| e.port), Some(5900));
+}
