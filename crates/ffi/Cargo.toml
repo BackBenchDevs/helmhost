@@ -1,0 +1,18 @@
+[package]
+name = "helmhost-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI bridge for Helmhost Flutter client"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+helmhost-core = { workspace = true }
+helmhost-rfb = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+once_cell = "1"
+base64 = "0.22"

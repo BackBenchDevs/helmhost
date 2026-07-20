@@ -7,6 +7,8 @@ description = "Session manager, connection registry, input focus, protocol trait
 
 [dependencies]
 tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }

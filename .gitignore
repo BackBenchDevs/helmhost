@@ -36,6 +36,9 @@ Thumbs.db
 **/.pub-cache/
 **/.pub/
 
+# Local Flutter SDK checkout (optional)
+tools/
+
 # Native / FFI
 **/*.so
 **/*.dylib
@@ -59,3 +62,7 @@ credentials.json
 # Coverage
 **/coverage/
 **/lcov.info
+
+# Local Flutter SDK + build artifacts
+tools/
+
