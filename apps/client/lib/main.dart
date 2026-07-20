@@ -2,18 +2,57 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'bridge.dart';
+import 'keysyms.dart';
 
-void main() {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const HelmhostApp());
+  await windowManager.ensureInitialized();
+
+  final controller = await WindowController.fromCurrentEngine();
+  final raw = controller.arguments.trim();
+  Map<String, dynamic> winArgs = {};
+  if (raw.isNotEmpty) {
+    try {
+      winArgs = jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      winArgs = {};
+    }
+  }
+
+  await controller.setWindowMethodHandler((call) async {
+    switch (call.method) {
+      case 'window_close':
+        await windowManager.close();
+        return null;
+      default:
+        throw MissingPluginException(call.method);
+    }
+  });
+
+  final role = winArgs['role'] as String? ?? 'hub';
+  if (role == 'session') {
+    final sessionId = (winArgs['sessionId'] as num).toInt();
+    final title = winArgs['title'] as String? ?? 'Session';
+    await windowManager.setTitle(title);
+    runApp(SessionApp(sessionId: sessionId, title: title));
+  } else {
+    await windowManager.setTitle('Helmhost');
+    runApp(const HubApp());
+  }
 }
 
-class HelmhostApp extends StatelessWidget {
-  const HelmhostApp({super.key});
+extension on WindowController {
+  Future<void> closeWindow() => invokeMethod('window_close');
+}
+
+class HubApp extends StatelessWidget {
+  const HubApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -28,6 +67,29 @@ class HelmhostApp extends StatelessWidget {
   }
 }
 
+class SessionApp extends StatelessWidget {
+  const SessionApp({super.key, required this.sessionId, required this.title});
+
+  final int sessionId;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: title,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1B4D3E)),
+        useMaterial3: true,
+      ),
+      home: SessionPage(
+        sessionId: sessionId,
+        title: title,
+        closeOnExit: true,
+      ),
+    );
+  }
+}
+
 class HubPage extends StatefulWidget {
   const HubPage({super.key});
 
@@ -35,7 +97,7 @@ class HubPage extends StatefulWidget {
   State<HubPage> createState() => _HubPageState();
 }
 
-class _HubPageState extends State<HubPage> {
+class _HubPageState extends State<HubPage> with WindowListener {
   HelmBridge? _bridge;
   String _hello = '';
   String? _error;
@@ -48,7 +110,39 @@ class _HubPageState extends State<HubPage> {
   @override
   void initState() {
     super.initState();
+    windowManager.addListener(this);
+    windowManager.setPreventClose(true);
     _boot();
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    _host.dispose();
+    _port.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  @override
+  void onWindowClose() async {
+    for (final s in List<_OpenSession>.from(_sessions)) {
+      try {
+        _bridge?.close(s.id);
+      } catch (_) {}
+      try {
+        final all = await WindowController.getAll();
+        for (final c in all) {
+          if (c.arguments.isEmpty) continue;
+          final a = jsonDecode(c.arguments) as Map<String, dynamic>;
+          if (a['role'] == 'session' &&
+              (a['sessionId'] as num).toInt() == s.id) {
+            await c.closeWindow();
+          }
+        }
+      } catch (_) {}
+    }
+    await windowManager.destroy();
   }
 
   Future<void> _boot() async {
@@ -66,6 +160,29 @@ class _HubPageState extends State<HubPage> {
     }
   }
 
+  Future<void> _openSessionWindow(int id, String title) async {
+    final args = jsonEncode({
+      'role': 'session',
+      'sessionId': id,
+      'title': title,
+    });
+    final existing = await WindowController.getAll();
+    for (final c in existing) {
+      if (c.arguments.isEmpty) continue;
+      try {
+        final a = jsonDecode(c.arguments) as Map<String, dynamic>;
+        if (a['role'] == 'session' && (a['sessionId'] as num).toInt() == id) {
+          await c.show();
+          return;
+        }
+      } catch (_) {}
+    }
+    final created = await WindowController.create(
+      WindowConfiguration(arguments: args, hiddenAtLaunch: true),
+    );
+    await created.show();
+  }
+
   Future<void> _connect() async {
     final b = _bridge;
     if (b == null) return;
@@ -76,22 +193,12 @@ class _HubPageState extends State<HubPage> {
       final id = b.connect(host, port, pw.isEmpty ? null : pw);
       b.grab(id);
       b.registryUpsert('$host:$port', host, port, null);
+      final title = '$host:$port';
       setState(() {
-        _sessions.add(_OpenSession(id: id, title: '$host:$port'));
+        _sessions.add(_OpenSession(id: id, title: title));
         _entries = b.registryList();
       });
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => SessionPage(
-            bridge: b,
-            sessionId: id,
-            title: '$host:$port',
-            closeOnExit: false,
-            onClosed: () {},
-          ),
-        ),
-      );
+      await _openSessionWindow(id, title);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -107,26 +214,25 @@ class _HubPageState extends State<HubPage> {
   }
 
   Future<void> _openSession(_OpenSession s) async {
-    final b = _bridge;
-    if (b == null) return;
-    b.grab(s.id);
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SessionPage(
-          bridge: b,
-          sessionId: s.id,
-          title: s.title,
-          closeOnExit: false,
-          onClosed: () {},
-        ),
-      ),
-    );
+    _bridge?.grab(s.id);
+    await _openSessionWindow(s.id, s.title);
   }
 
   Future<void> _disconnectSession(_OpenSession s) async {
     try {
       _bridge?.close(s.id);
     } catch (_) {}
+    final all = await WindowController.getAll();
+    for (final c in all) {
+      if (c.arguments.isEmpty) continue;
+      try {
+        final a = jsonDecode(c.arguments) as Map<String, dynamic>;
+        if (a['role'] == 'session' &&
+            (a['sessionId'] as num).toInt() == s.id) {
+          await c.closeWindow();
+        }
+      } catch (_) {}
+    }
     setState(() => _sessions.removeWhere((x) => x.id == s.id));
   }
 
@@ -139,11 +245,12 @@ class _HubPageState extends State<HubPage> {
           return SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight - 48),
+              constraints:
+                  BoxConstraints(minHeight: constraints.maxHeight - 48),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('Hub',
+                  Text('Library',
                       style: Theme.of(context).textTheme.headlineMedium),
                   const SizedBox(height: 8),
                   Text(
@@ -237,17 +344,13 @@ class _OpenSession {
 class SessionPage extends StatefulWidget {
   const SessionPage({
     super.key,
-    required this.bridge,
     required this.sessionId,
     required this.title,
-    required this.onClosed,
     this.closeOnExit = true,
   });
 
-  final HelmBridge bridge;
   final int sessionId;
   final String title;
-  final VoidCallback onClosed;
   final bool closeOnExit;
 
   @override
@@ -255,84 +358,79 @@ class SessionPage extends StatefulWidget {
 }
 
 class _SessionPageState extends State<SessionPage> {
+  late final HelmBridge _bridge;
   Timer? _timer;
   ui.Image? _frame;
   int _fw = 0;
   int _fh = 0;
-  Uint8List? _fb;
   bool _grabbed = true;
+  bool _dirty = false;
+  bool _pumping = false;
+  String? _lastError;
+  final _viewKey = GlobalKey();
+  final _focusNode = FocusNode();
+  /// physicalKey.usbHidUsage → keysym sent on press (matched on release).
+  final _downKeysyms = <int, int>{};
 
   @override
   void initState() {
     super.initState();
-    widget.bridge.grab(widget.sessionId);
+    _bridge = HelmBridge.open();
+    _bridge.grab(widget.sessionId);
     _timer = Timer.periodic(const Duration(milliseconds: 16), (_) => _pump());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _releaseAllKeys();
     if (widget.closeOnExit) {
       try {
-        widget.bridge.close(widget.sessionId);
+        _bridge.close(widget.sessionId);
       } catch (_) {}
-      widget.onClosed();
     }
-    widget.bridge.releaseFocus();
+    try {
+      _bridge.releaseFocus();
+    } catch (_) {}
+    _focusNode.dispose();
     _frame?.dispose();
     super.dispose();
   }
 
-  Future<void> _pump() async {
-    try {
-      for (var i = 0; i < 32; i++) {
-        final ev = widget.bridge.pollEvent(widget.sessionId);
-        final type = ev['type'] as String? ?? 'none';
-        if (type == 'none') break;
-        if (type == 'desktop_resize') {
-          _fw = ev['w'] as int;
-          _fh = ev['h'] as int;
-          _fb = Uint8List(_fw * _fh * 4);
-        } else if (type == 'damage') {
-          await _applyDamage(ev);
-        } else if (type == 'disconnected' || type == 'error') {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(ev.toString())),
-            );
-          }
-        }
-      }
-    } catch (e) {
-      // ignore transient
+  void _releaseAllKeys() {
+    for (final sym in _downKeysyms.values) {
+      try {
+        _bridge.sendKey(widget.sessionId, false, sym);
+      } catch (_) {}
     }
+    _downKeysyms.clear();
   }
 
-  Future<void> _applyDamage(Map<String, dynamic> ev) async {
-    final x = ev['x'] as int;
-    final y = ev['y'] as int;
-    final w = ev['w'] as int;
-    final h = ev['h'] as int;
-    final b64 = ev['rgba_b64'] as String;
-    final rgba = base64Decode(b64);
-    if (_fb == null || _fw == 0 || _fh == 0) {
-      _fw = x + w;
-      _fh = y + h;
-      _fb = Uint8List(_fw * _fh * 4);
+  void _setGrabbed(bool grab) {
+    if (grab) {
+      _bridge.grab(widget.sessionId);
+      _focusNode.requestFocus();
+    } else {
+      _releaseAllKeys();
+      _bridge.releaseFocus();
     }
-    final fb = _fb!;
-    for (var row = 0; row < h; row++) {
-      final src = row * w * 4;
-      final dst = ((y + row) * _fw + x) * 4;
-      if (dst + w * 4 <= fb.length && src + w * 4 <= rgba.length) {
-        fb.setRange(dst, dst + w * 4, rgba, src);
-      }
-    }
+    setState(() => _grabbed = grab);
+  }
+
+  Future<void> _pullFramebuffer() async {
+    final (w, h) = _bridge.fbSize(widget.sessionId);
+    if (w <= 0 || h <= 0) return;
+    _fw = w;
+    _fh = h;
+    final pixels = _bridge.fbCopy(widget.sessionId, w, h);
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
-      Uint8List.fromList(fb),
-      _fw,
-      _fh,
+      pixels,
+      w,
+      h,
       ui.PixelFormat.rgba8888,
       completer.complete,
     );
@@ -344,47 +442,111 @@ class _SessionPageState extends State<SessionPage> {
     setState(() {
       _frame?.dispose();
       _frame = img;
+      _lastError = null;
     });
   }
 
-  void _onPointer(PointerEvent e, int buttons) {
+  Future<void> _pump() async {
+    if (_pumping) return;
+    _pumping = true;
+    try {
+      var dirty = _dirty;
+      _dirty = false;
+      for (var i = 0; i < 64; i++) {
+        final ev = _bridge.pollEvent(widget.sessionId);
+        final type = ev['type'] as String? ?? 'none';
+        if (type == 'none') break;
+        if (type == 'desktop_resize') {
+          _fw = (ev['w'] as num).toInt();
+          _fh = (ev['h'] as num).toInt();
+          dirty = true;
+        } else if (type == 'framebuffer_dirty') {
+          dirty = true;
+        } else if (type == 'disconnected' || type == 'error') {
+          final msg = type == 'error'
+              ? (ev['message'] as String? ?? ev.toString())
+              : 'Disconnected';
+          if (mounted) {
+            setState(() => _lastError = msg);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(msg)),
+            );
+          }
+        }
+      }
+      if (dirty) {
+        await _pullFramebuffer();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _lastError = e.toString());
+      }
+    } finally {
+      _pumping = false;
+    }
+  }
+
+  /// Map a pointer into remote FB coords using letterboxed contain-fit.
+  (int, int)? _remoteXY(Offset global) {
+    final box = _viewKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || _fw <= 0 || _fh <= 0) return null;
+    final local = box.globalToLocal(global);
+    final vw = box.size.width;
+    final vh = box.size.height;
+    if (vw <= 0 || vh <= 0) return null;
+    final scale = (vw / _fw < vh / _fh) ? vw / _fw : vh / _fh;
+    final dw = _fw * scale;
+    final dh = _fh * scale;
+    final ox = (vw - dw) / 2;
+    final oy = (vh - dh) / 2;
+    final rx = ((local.dx - ox) / scale).round();
+    final ry = ((local.dy - oy) / scale).round();
+    if (rx < 0 || ry < 0 || rx >= _fw || ry >= _fh) return null;
+    return (rx, ry);
+  }
+
+  void _onPointer(Offset global, int buttons) {
     if (!_grabbed) return;
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null || _fw == 0) return;
-    final local = box.globalToLocal(e.position);
-    final scaleX = _fw / box.size.width;
-    final scaleY = _fh / box.size.height;
-    final x = (local.dx * scaleX).round().clamp(0, _fw - 1);
-    final y = (local.dy * scaleY).round().clamp(0, _fh - 1);
-    widget.bridge.sendPointer(widget.sessionId, x, y, buttons);
+    _focusNode.requestFocus();
+    final xy = _remoteXY(global);
+    if (xy == null) return;
+    try {
+      _bridge.sendPointer(widget.sessionId, xy.$1, xy.$2, buttons);
+    } catch (_) {}
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (!_grabbed) return KeyEventResult.ignored;
-    // Minimal ASCII / return mapping for MVP
-    final key = event.logicalKey;
-    var keysym = 0;
-    if (key == LogicalKeyboardKey.enter) {
-      keysym = 0xff0d;
-    } else if (key == LogicalKeyboardKey.backspace) {
-      keysym = 0xff08;
-    } else if (key == LogicalKeyboardKey.escape) {
-      keysym = 0xff1b;
-      widget.bridge.releaseFocus();
-      setState(() => _grabbed = false);
-      return KeyEventResult.handled;
-    } else if (key.keyLabel.length == 1) {
-      keysym = key.keyLabel.codeUnitAt(0);
-    }
-    if (keysym != 0) {
-      widget.bridge.sendKey(
-        widget.sessionId,
-        event is KeyDownEvent || event is KeyRepeatEvent,
-        keysym,
-      );
+
+    final phys = event.physicalKey.usbHidUsage;
+    final down = event is KeyDownEvent || event is KeyRepeatEvent;
+
+    if (!down) {
+      final sym = _downKeysyms.remove(phys);
+      if (sym == null) return KeyEventResult.ignored;
+      try {
+        _bridge.sendKey(widget.sessionId, false, sym);
+      } catch (_) {}
       return KeyEventResult.handled;
     }
-    return KeyEventResult.ignored;
+
+    // KeyRepeat: re-send down with same keysym if already tracked
+    if (event is KeyRepeatEvent) {
+      final sym = _downKeysyms[phys];
+      if (sym == null) return KeyEventResult.ignored;
+      try {
+        _bridge.sendKey(widget.sessionId, true, sym);
+      } catch (_) {}
+      return KeyEventResult.handled;
+    }
+
+    final sym = keysymForKeyEvent(event);
+    if (sym == null) return KeyEventResult.ignored;
+    _downKeysyms[phys] = sym;
+    try {
+      _bridge.sendKey(widget.sessionId, true, sym);
+    } catch (_) {}
+    return KeyEventResult.handled;
   }
 
   @override
@@ -393,34 +555,59 @@ class _SessionPageState extends State<SessionPage> {
       appBar: AppBar(
         title: Text(widget.title),
         actions: [
+          if (_lastError != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Center(
+                child: Text(
+                  _lastError!,
+                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
           TextButton(
-            onPressed: () {
-              if (_grabbed) {
-                widget.bridge.releaseFocus();
-              } else {
-                widget.bridge.grab(widget.sessionId);
-              }
-              setState(() => _grabbed = !_grabbed);
-            },
+            onPressed: () => _setGrabbed(!_grabbed),
             child: Text(_grabbed ? 'Release input' : 'Grab input'),
           ),
         ],
       ),
       body: Focus(
+        focusNode: _focusNode,
         autofocus: true,
         onKeyEvent: _onKey,
         child: Listener(
-          onPointerDown: (e) => _onPointer(e, 1),
-          onPointerMove: (e) => _onPointer(e, e.buttons),
-          onPointerUp: (e) => _onPointer(e, 0),
+          behavior: HitTestBehavior.opaque,
+          onPointerHover: (e) => _onPointer(e.position, 0),
+          onPointerDown: (e) =>
+              _onPointer(e.position, e.buttons == 0 ? 1 : e.buttons),
+          onPointerMove: (e) => _onPointer(e.position, e.buttons),
+          onPointerUp: (e) => _onPointer(e.position, 0),
           child: ColoredBox(
+            key: _viewKey,
             color: Colors.black,
-            child: Center(
-              child: _frame == null
-                  ? const Text('Waiting for framebuffer…',
-                      style: TextStyle(color: Colors.white70))
-                  : RawImage(image: _frame, fit: BoxFit.contain),
-            ),
+            child: _frame == null
+                ? Center(
+                    child: Text(
+                      _lastError ?? 'Waiting for framebuffer…',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  )
+                : SizedBox.expand(
+                    child: FittedBox(
+                      fit: BoxFit.contain,
+                      child: SizedBox(
+                        width: _fw.toDouble(),
+                        height: _fh.toDouble(),
+                        child: RawImage(
+                          image: _frame,
+                          width: _fw.toDouble(),
+                          height: _fh.toDouble(),
+                          fit: BoxFit.fill,
+                        ),
+                      ),
+                    ),
+                  ),
           ),
         ),
       ),

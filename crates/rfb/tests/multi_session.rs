@@ -64,7 +64,7 @@ async fn mock_peer_half(mut server: impl AsyncReadExt + AsyncWriteExt + Unpin) {
 async fn wait_damage(handle: &mut helmhost_core::SessionHandle) -> bool {
     for _ in 0..20 {
         match timeout(Duration::from_millis(100), handle.events.recv()).await {
-            Ok(Some(SessionEvent::Damage { .. })) => return true,
+            Ok(Some(SessionEvent::FramebufferDirty { .. })) => return true,
             Ok(Some(_)) => continue,
             _ => return false,
         }
@@ -149,28 +149,26 @@ fn damage_coalesce_drops_when_full() {
         .unwrap();
     rt.block_on(async {
         let (tx, mut rx) = mpsc::channel::<SessionEvent>(1);
-        tx.try_send(SessionEvent::Damage {
+        tx.try_send(SessionEvent::FramebufferDirty {
             rect: helmhost_core::Rect {
                 x: 0,
                 y: 0,
                 w: 1,
                 h: 1,
             },
-            rgba: vec![1, 2, 3, 4],
         })
         .unwrap();
-        let full = tx.try_send(SessionEvent::Damage {
+        let full = tx.try_send(SessionEvent::FramebufferDirty {
             rect: helmhost_core::Rect {
                 x: 0,
                 y: 0,
                 w: 1,
                 h: 1,
             },
-            rgba: vec![5, 6, 7, 8],
         });
         assert!(full.is_err());
         let _ = rx.recv().await;
-        assert_eq!(DEFAULT_QUEUE_CAPACITY, 64);
+        assert_eq!(DEFAULT_QUEUE_CAPACITY, 256);
     });
 }
 

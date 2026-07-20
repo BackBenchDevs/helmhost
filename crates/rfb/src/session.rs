@@ -1,6 +1,5 @@
 //! Async RFB session: handshake then reader + writer tasks on command/event queues.
 
-use crate::fb_cache::FramebufferCache;
 use crate::handshake::{
     finish_client_server_init, handshake_security_and_init, parse_security_result,
     vnc_auth_exchange, ServerInit, SEC_NONE, SEC_VENCRYPT, SEC_VNC_AUTH,
@@ -8,20 +7,20 @@ use crate::handshake::{
 use crate::io::{read_exact, write_all};
 use crate::messages::{
     decode_raw_rect, encode_client_cut_text, encode_fb_update_request, encode_key_event,
-    encode_pointer_event, encode_set_encodings, encode_set_pixel_format, parse_copyrect_src,
-    parse_fb_update_header, parse_rect_header, parse_server_cut_text, preferred_encodings,
-    ENC_COPYRECT, ENC_DESKTOP_SIZE, ENC_LAST_RECT, ENC_RAW, ENC_ZRLE, MSG_BELL, MSG_FRAMEBUFFER_UPDATE,
-    MSG_SERVER_CUT_TEXT, MSG_SET_COLOUR_MAP,
+    encode_pointer_event, encode_set_encodings, encode_set_pixel_format, parse_fb_update_header,
+    parse_rect_header, parse_server_cut_text, preferred_encodings, ENC_COPYRECT, ENC_DESKTOP_SIZE,
+    ENC_LAST_RECT, ENC_RAW, ENC_ZRLE, MSG_BELL, MSG_FRAMEBUFFER_UPDATE, MSG_SERVER_CUT_TEXT,
+    MSG_SET_COLOUR_MAP,
 };
 use crate::pixel_format::PixelFormat;
 use crate::vencrypt::{
     negotiate_vencrypt_subtype, wrap_tcp_tls, TlsOptions, VENCRYPT_TLSNONE, VENCRYPT_TLSVNC,
 };
-use crate::zrle::decode_zrle;
 use helmhost_core::{
-    Creds, Rect, SessionCommand, SessionEvent, SessionHandle, SessionId, DEFAULT_QUEUE_CAPACITY,
+    Creds, FramebufferCache, SessionCommand, SessionEvent, SessionHandle, SessionId,
+    DEFAULT_QUEUE_CAPACITY,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -30,7 +29,7 @@ struct SharedDesktop {
     width: u16,
     height: u16,
     pixel_format: PixelFormat,
-    cache: FramebufferCache,
+    cache: Arc<StdMutex<FramebufferCache>>,
 }
 
 impl SharedDesktop {
@@ -39,7 +38,10 @@ impl SharedDesktop {
             width,
             height,
             pixel_format: pf,
-            cache: FramebufferCache::new(u32::from(width), u32::from(height)),
+            cache: Arc::new(StdMutex::new(FramebufferCache::new(
+                u32::from(width),
+                u32::from(height),
+            ))),
         }
     }
 }
@@ -166,6 +168,10 @@ where
         .await;
 
     let shared = Arc::new(Mutex::new(desktop));
+    let framebuffer = {
+        let g = shared.lock().await;
+        Arc::clone(&g.cache)
+    };
     let (mut rd, mut wr) = tokio::io::split(stream);
 
     let writer_state = Arc::clone(&shared);
@@ -188,18 +194,13 @@ where
         height: u32::from(init.height),
         events: ev_rx,
         commands: cmd_tx,
+        framebuffer,
     })
 }
 
 async fn send_event(tx: &mpsc::Sender<SessionEvent>, ev: SessionEvent) {
-    match &ev {
-        SessionEvent::Damage { .. } => {
-            let _ = tx.try_send(ev);
-        }
-        _ => {
-            let _ = tx.send(ev).await;
-        }
-    }
+    // Always await: try_send was dropping framebuffer damage under load → black UI.
+    let _ = tx.send(ev).await;
 }
 
 async fn writer_loop<W: AsyncWrite + Unpin>(
@@ -297,60 +298,33 @@ async fn handle_rect<R: AsyncRead + Unpin>(
             };
             let nbytes = bpp * hdr.w as usize * hdr.h as usize;
             let data = read_exact(rd, nbytes).await?;
-            let mut g = state.lock().await;
+            let g = state.lock().await;
             let (rect, rgba) = decode_raw_rect(&g.pixel_format, &hdr, &data)?;
-            g.cache.put_damage(rect, &rgba)?;
+            g.cache
+                .lock()
+                .map_err(|_| "fb cache lock".to_string())?
+                .put_damage(rect, &rgba)?;
             drop(g);
-            send_event(ev_tx, SessionEvent::Damage { rect, rgba }).await;
+            send_event(ev_tx, SessionEvent::FramebufferDirty { rect }).await;
         }
         ENC_COPYRECT => {
-            let src = read_exact(rd, 4).await?;
-            let (sx, sy) = parse_copyrect_src(&src)?;
-            let rect = Rect {
-                x: i32::from(hdr.x),
-                y: i32::from(hdr.y),
-                w: u32::from(hdr.w),
-                h: u32::from(hdr.h),
-            };
-            let mut g = state.lock().await;
-            let rgba = g.cache.copy_rect(rect, i32::from(sx), i32::from(sy))?;
-            drop(g);
-            send_event(ev_tx, SessionEvent::Damage { rect, rgba }).await;
+            let _ = read_exact(rd, 4).await?;
+            return Err("server sent CopyRect; client advertises Raw only".into());
         }
         ENC_ZRLE => {
             let lenb = read_exact(rd, 4).await?;
             let zlen = u32::from_be_bytes([lenb[0], lenb[1], lenb[2], lenb[3]]) as usize;
-            let zdata = read_exact(rd, zlen).await?;
-            let mut framed = lenb;
-            framed.extend_from_slice(&zdata);
-            let mut g = state.lock().await;
-            match decode_zrle(
-                &g.pixel_format,
-                u32::from(hdr.w),
-                u32::from(hdr.h),
-                &framed,
-            ) {
-                Ok(rgba) => {
-                    let rect = Rect {
-                        x: i32::from(hdr.x),
-                        y: i32::from(hdr.y),
-                        w: u32::from(hdr.w),
-                        h: u32::from(hdr.h),
-                    };
-                    g.cache.put_damage(rect, &rgba)?;
-                    drop(g);
-                    send_event(ev_tx, SessionEvent::Damage { rect, rgba }).await;
-                }
-                Err(_) => {
-                    // Skip failed ZRLE rect (already consumed from wire)
-                }
-            }
+            let _ = read_exact(rd, zlen).await?;
+            return Err("server sent ZRLE; client advertises Raw only".into());
         }
         ENC_DESKTOP_SIZE => {
             let mut g = state.lock().await;
             g.width = hdr.w;
             g.height = hdr.h;
-            g.cache.resize(u32::from(hdr.w), u32::from(hdr.h));
+            g.cache
+                .lock()
+                .map_err(|_| "fb cache lock".to_string())?
+                .resize(u32::from(hdr.w), u32::from(hdr.h));
             let w = u32::from(hdr.w);
             let h = u32::from(hdr.h);
             drop(g);

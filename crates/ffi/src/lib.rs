@@ -3,7 +3,6 @@
 //! Also exposes a Rust `hello()` used by unit tests (FRB-ready surface).
 #![allow(clippy::missing_safety_doc)]
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use helmhost_core::{
     ConnectTarget, ConnectionEntry, ConnectionRegistry, Creds, InputFocus, KeyEvent, PointerEvent,
     SessionCommand, SessionEvent, SessionHandle, SessionId, SessionManager,
@@ -13,7 +12,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tokio::runtime::Runtime;
@@ -59,12 +58,11 @@ pub fn hello() -> String {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum FfiEvent {
     DesktopResize { w: u32, h: u32 },
-    Damage {
+    FramebufferDirty {
         x: i32,
         y: i32,
         w: u32,
         h: u32,
-        rgba_b64: String,
     },
     Bell,
     Clipboard { text: String },
@@ -77,12 +75,11 @@ fn encode_event(ev: Option<SessionEvent>) -> String {
     let mapped = match ev {
         None => FfiEvent::None,
         Some(SessionEvent::DesktopResize { w, h }) => FfiEvent::DesktopResize { w, h },
-        Some(SessionEvent::Damage { rect, rgba }) => FfiEvent::Damage {
+        Some(SessionEvent::FramebufferDirty { rect }) => FfiEvent::FramebufferDirty {
             x: rect.x,
             y: rect.y,
             w: rect.w,
             h: rect.h,
-            rgba_b64: B64.encode(&rgba),
         },
         Some(SessionEvent::Bell) => FfiEvent::Bell,
         Some(SessionEvent::Clipboard(text)) => FfiEvent::Clipboard { text },
@@ -207,6 +204,51 @@ pub extern "C" fn hh_poll_event(session_id: u64) -> *mut c_char {
     }
 }
 
+/// Write desktop width/height for `session_id`. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub unsafe extern "C" fn hh_fb_size(session_id: u64, w: *mut u32, h: *mut u32) -> c_int {
+    if w.is_null() || h.is_null() {
+        return -1;
+    }
+    let Ok(state) = STATE.lock() else {
+        return -1;
+    };
+    let Some(handle) = state.sessions.get(&session_id) else {
+        return -1;
+    };
+    let Ok(fb) = handle.framebuffer.lock() else {
+        return -1;
+    };
+    let (fw, fh) = fb.size();
+    unsafe {
+        *w = fw;
+        *h = fh;
+    }
+    0
+}
+
+/// Copy full RGBA8 framebuffer into `out` (`out_len` must be `w*h*4`). Returns 0 or -1.
+#[no_mangle]
+pub unsafe extern "C" fn hh_fb_copy(session_id: u64, out: *mut u8, out_len: usize) -> c_int {
+    if out.is_null() || out_len == 0 {
+        return -1;
+    }
+    let Ok(state) = STATE.lock() else {
+        return -1;
+    };
+    let Some(handle) = state.sessions.get(&session_id) else {
+        return -1;
+    };
+    let Ok(fb) = handle.framebuffer.lock() else {
+        return -1;
+    };
+    let slice = unsafe { std::slice::from_raw_parts_mut(out, out_len) };
+    match fb.copy_to(slice) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn hh_send_pointer(session_id: u64, x: i32, y: i32, buttons: u8) -> *mut c_char {
     send_cmd(
@@ -245,6 +287,9 @@ pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
 fn send_cmd(session_id: u64, cmd: SessionCommand) -> *mut c_char {
     let result = RT.block_on(async {
         let state = STATE.lock().map_err(|_| "lock".to_string())?;
+        if !state.focus.allows(SessionId(session_id)) {
+            return Err("focus not grabbed".to_string());
+        }
         let Some(handle) = state.sessions.get(&session_id) else {
             return Err("unknown session".to_string());
         };
@@ -363,9 +408,19 @@ pub extern "C" fn hh_registry_upsert(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use helmhost_core::SessionId;
 
     #[test]
     fn hello_is_helmhost() {
         assert_eq!(hello(), "helmhost");
+    }
+
+    #[test]
+    fn focus_gate_matches_allows() {
+        let mut focus = InputFocus::Released;
+        assert!(!focus.allows(SessionId(7)));
+        focus.grab(SessionId(7));
+        assert!(focus.allows(SessionId(7)));
+        assert!(!focus.allows(SessionId(8)));
     }
 }

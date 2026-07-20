@@ -103,7 +103,7 @@ async fn mock_peer_handshake_raw_and_pointer() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
         match timeout(Duration::from_millis(200), handle.events.recv()).await {
-            Ok(Some(SessionEvent::Damage { .. })) => {
+            Ok(Some(SessionEvent::FramebufferDirty { .. })) => {
                 saw_damage = true;
                 break;
             }
@@ -113,7 +113,17 @@ async fn mock_peer_handshake_raw_and_pointer() {
             Err(_) => continue,
         }
     }
-    assert!(saw_damage, "expected Damage event");
+    assert!(saw_damage, "expected FramebufferDirty event");
+
+    // Blue pixels: BGR888 LE → pix[2]=255 → RGBA (0,0,255,255) per pixel
+    let fb = handle.framebuffer.lock().expect("fb lock");
+    let (fw, fh) = fb.size();
+    assert_eq!((fw, fh), (2, 1));
+    let mut snap = vec![0u8; fb.byte_len()];
+    fb.copy_to(&mut snap).unwrap();
+    drop(fb);
+    assert_eq!(&snap[0..4], &[0, 0, 255, 255]);
+    assert_eq!(&snap[4..8], &[0, 0, 255, 255]);
 
     handle
         .send(SessionCommand::Pointer(PointerEvent {
