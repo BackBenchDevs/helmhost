@@ -1,0 +1,9 @@
+[book]
+title = "Helmhost"
+description = "Open multi-session RFB / VNC viewer"
+authors = ["Helmhost"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/helmhost/helmhost"
