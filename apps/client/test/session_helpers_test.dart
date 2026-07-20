@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:helmhost_client/session_helpers.dart';
 
@@ -35,6 +36,12 @@ void main() {
       expect(ViewScaleMode.fit.label, 'Fit');
       expect(ViewScaleMode.fill.label, 'Fill');
       expect(ViewScaleMode.oneToOne.label, '1:1');
+    });
+
+    test('boxFit mapping', () {
+      expect(ViewScaleMode.fit.boxFit, BoxFit.contain);
+      expect(ViewScaleMode.fill.boxFit, BoxFit.cover);
+      expect(ViewScaleMode.oneToOne.boxFit, isNull);
     });
   });
 }

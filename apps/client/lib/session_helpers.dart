@@ -1,5 +1,7 @@
 // Pure helpers for Hub session dedup / keys (unit-testable).
 
+import 'package:flutter/widgets.dart';
+
 String sessionKey(String host, int port) => '$host:$port';
 
 class OpenSessionRef {
@@ -45,6 +47,18 @@ extension ViewScaleModeX on ViewScaleMode {
         return 'Fill';
       case ViewScaleMode.oneToOne:
         return '1:1';
+    }
+  }
+
+  /// BoxFit for Fit/Fill; null means 1:1 (no FittedBox scale).
+  BoxFit? get boxFit {
+    switch (this) {
+      case ViewScaleMode.fit:
+        return BoxFit.contain;
+      case ViewScaleMode.fill:
+        return BoxFit.cover;
+      case ViewScaleMode.oneToOne:
+        return null;
     }
   }
 }

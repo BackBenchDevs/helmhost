@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'bridge.dart';
 import 'keysyms.dart';
+import 'session_helpers.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -106,6 +107,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
   final _port = TextEditingController(text: '5900');
   final _password = TextEditingController();
   final _sessions = <_OpenSession>[];
+  bool _connecting = false;
+
+  List<OpenSessionRef> get _sessionRefs => _sessions
+      .map((s) => OpenSessionRef(id: s.id, host: s.host, port: s.port))
+      .toList();
 
   @override
   void initState() {
@@ -171,7 +177,10 @@ class _HubPageState extends State<HubPage> with WindowListener {
       if (c.arguments.isEmpty) continue;
       try {
         final a = jsonDecode(c.arguments) as Map<String, dynamic>;
-        if (a['role'] == 'session' && (a['sessionId'] as num).toInt() == id) {
+        if (a['role'] != 'session') continue;
+        final sid = (a['sessionId'] as num?)?.toInt();
+        final t = a['title'] as String?;
+        if (sid == id || t == title) {
           await c.show();
           return;
         }
@@ -185,17 +194,30 @@ class _HubPageState extends State<HubPage> with WindowListener {
 
   Future<void> _connect() async {
     final b = _bridge;
-    if (b == null) return;
+    if (b == null || _connecting) return;
     final host = _host.text.trim();
     final port = int.tryParse(_port.text.trim()) ?? 5900;
     final pw = _password.text;
+
+    final existing = findOpenByHostPort(_sessionRefs, host, port);
+    if (existing != null) {
+      b.grab(existing.id);
+      await _openSessionWindow(existing.id, sessionKey(host, port));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Session already open')),
+      );
+      return;
+    }
+
+    setState(() => _connecting = true);
     try {
       final id = b.connect(host, port, pw.isEmpty ? null : pw);
       b.grab(id);
-      b.registryUpsert('$host:$port', host, port, null);
-      final title = '$host:$port';
+      b.registryUpsert(sessionKey(host, port), host, port, null);
+      final title = sessionKey(host, port);
       setState(() {
-        _sessions.add(_OpenSession(id: id, title: title));
+        _sessions.add(_OpenSession(id: id, host: host, port: port));
         _entries = b.registryList();
       });
       await _openSessionWindow(id, title);
@@ -204,6 +226,8 @@ class _HubPageState extends State<HubPage> with WindowListener {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Connect failed: $e')),
       );
+    } finally {
+      if (mounted) setState(() => _connecting = false);
     }
   }
 
@@ -236,98 +260,150 @@ class _HubPageState extends State<HubPage> with WindowListener {
     setState(() => _sessions.removeWhere((x) => x.id == s.id));
   }
 
+  Widget _savedList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Saved connections',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (_entries.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Text('No saved connections yet'),
+          )
+        else
+          ..._entries.map((raw) {
+            final e = raw as Map<String, dynamic>;
+            final title =
+                e['display_name'] as String? ?? '${e['host']}:${e['port']}';
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(title),
+              subtitle: Text('${e['host']}:${e['port']}'),
+              onTap: () => _openSaved(e),
+            );
+          }),
+      ],
+    );
+  }
+
+  Widget _connectForm() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Connect', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _host,
+          decoration: const InputDecoration(
+            labelText: 'Host',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _port,
+          decoration: const InputDecoration(
+            labelText: 'Port',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.number,
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _password,
+          obscureText: true,
+          decoration: const InputDecoration(
+            labelText: 'Password',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        FilledButton(
+          onPressed: (_bridge == null || _connecting) ? null : _connect,
+          child: Text(_connecting ? 'Connecting…' : 'Connect'),
+        ),
+        if (_sessions.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          Text('Open sessions',
+              style: Theme.of(context).textTheme.titleMedium),
+          ..._sessions.map(
+            (s) => ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(s.title),
+              subtitle: Text('id ${s.id}'),
+              onTap: () => _openSession(s),
+              trailing: IconButton(
+                tooltip: 'Disconnect',
+                icon: const Icon(Icons.close),
+                onPressed: () => _disconnectSession(s),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Helmhost')),
+      appBar: AppBar(title: const Text('Library')),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints:
-                  BoxConstraints(minHeight: constraints.maxHeight - 48),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text('Library',
-                      style: Theme.of(context).textTheme.headlineMedium),
-                  const SizedBox(height: 8),
-                  Text(
-                    _error != null
-                        ? 'Bridge: $_error'
-                        : 'FFI hello: $_hello · focus: ${_bridge?.focusGet() ?? "-"}',
-                  ),
-                  const SizedBox(height: 24),
-                  TextField(
-                    controller: _host,
-                    decoration: const InputDecoration(
-                      labelText: 'Host',
-                      border: OutlineInputBorder(),
+          final wide = constraints.maxWidth >= 720;
+          final body = wide
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 280,
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(24),
+                        child: _savedList(),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _port,
-                    decoration: const InputDecoration(
-                      labelText: 'Port',
-                      border: OutlineInputBorder(),
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _password,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Password',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton(
-                    onPressed: _bridge == null ? null : _connect,
-                    child: const Text('Connect'),
-                  ),
-                  const SizedBox(height: 24),
-                  Text('Saved connections',
-                      style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  if (_entries.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 24),
-                      child: Center(child: Text('No saved connections yet')),
-                    )
-                  else
-                    ..._entries.map((raw) {
-                      final e = raw as Map<String, dynamic>;
-                      final title = e['display_name'] as String? ??
-                          '${e['host']}:${e['port']}';
-                      return ListTile(
-                        title: Text(title),
-                        subtitle: Text('${e['host']}:${e['port']}'),
-                        onTap: () => _openSaved(e),
-                      );
-                    }),
-                  if (_sessions.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Text('Open sessions',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    ..._sessions.map(
-                      (s) => ListTile(
-                        title: Text(s.title),
-                        subtitle: Text('id ${s.id}'),
-                        onTap: () => _openSession(s),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => _disconnectSession(s),
-                        ),
+                    const VerticalDivider(width: 1),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(24),
+                        child: _connectForm(),
                       ),
                     ),
                   ],
-                ],
+                )
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _connectForm(),
+                      const SizedBox(height: 24),
+                      _savedList(),
+                    ],
+                  ),
+                );
+          return Column(
+            children: [
+              if (_error != null)
+                ColoredBox(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: ListTile(
+                    dense: true,
+                    title: Text(_error!, maxLines: 2, overflow: TextOverflow.ellipsis),
+                    trailing: TextButton(onPressed: _boot, child: const Text('Retry')),
+                  ),
+                ),
+              Expanded(child: body),
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(
+                  _error != null ? 'Bridge error' : 'Helmhost · $_hello',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               ),
-            ),
+            ],
           );
         },
       ),
@@ -336,9 +412,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
 }
 
 class _OpenSession {
-  _OpenSession({required this.id, required this.title});
+  _OpenSession({required this.id, required this.host, required this.port});
   final int id;
-  final String title;
+  final String host;
+  final int port;
+  String get title => sessionKey(host, port);
 }
 
 class SessionPage extends StatefulWidget {
@@ -371,6 +449,7 @@ class _SessionPageState extends State<SessionPage> {
   final _focusNode = FocusNode();
   /// physicalKey.usbHidUsage → keysym sent on press (matched on release).
   final _downKeysyms = <int, int>{};
+  ViewScaleMode _scaleMode = ViewScaleMode.fit;
 
   @override
   void initState() {
@@ -486,7 +565,7 @@ class _SessionPageState extends State<SessionPage> {
     }
   }
 
-  /// Map a pointer into remote FB coords using letterboxed contain-fit.
+  /// Map pointer into remote FB coords for current scale mode.
   (int, int)? _remoteXY(Offset global) {
     final box = _viewKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || _fw <= 0 || _fh <= 0) return null;
@@ -494,11 +573,31 @@ class _SessionPageState extends State<SessionPage> {
     final vw = box.size.width;
     final vh = box.size.height;
     if (vw <= 0 || vh <= 0) return null;
-    final scale = (vw / _fw < vh / _fh) ? vw / _fw : vh / _fh;
-    final dw = _fw * scale;
-    final dh = _fh * scale;
-    final ox = (vw - dw) / 2;
-    final oy = (vh - dh) / 2;
+
+    if (_scaleMode == ViewScaleMode.oneToOne) {
+      final rx = local.dx.round();
+      final ry = local.dy.round();
+      if (rx < 0 || ry < 0 || rx >= _fw || ry >= _fh) return null;
+      return (rx, ry);
+    }
+
+    final fit = _scaleMode.boxFit ?? BoxFit.contain;
+    late final double scale;
+    late final double ox;
+    late final double oy;
+    if (fit == BoxFit.cover) {
+      scale = (vw / _fw > vh / _fh) ? vw / _fw : vh / _fh;
+      final dw = _fw * scale;
+      final dh = _fh * scale;
+      ox = (vw - dw) / 2;
+      oy = (vh - dh) / 2;
+    } else {
+      scale = (vw / _fw < vh / _fh) ? vw / _fw : vh / _fh;
+      final dw = _fw * scale;
+      final dh = _fh * scale;
+      ox = (vw - dw) / 2;
+      oy = (vh - dh) / 2;
+    }
     final rx = ((local.dx - ox) / scale).round();
     final ry = ((local.dy - oy) / scale).round();
     if (rx < 0 || ry < 0 || rx >= _fw || ry >= _fh) return null;
@@ -549,12 +648,75 @@ class _SessionPageState extends State<SessionPage> {
     return KeyEventResult.handled;
   }
 
+  Widget _frameChild() {
+    if (_frame == null) {
+      return Center(
+        child: Text(
+          _lastError ?? 'Waiting for framebuffer…',
+          style: const TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+    final image = RawImage(
+      image: _frame,
+      width: _fw.toDouble(),
+      height: _fh.toDouble(),
+      fit: BoxFit.fill,
+    );
+    final fit = _scaleMode.boxFit;
+    if (fit == null) {
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SingleChildScrollView(
+          child: SizedBox(
+            width: _fw.toDouble(),
+            height: _fh.toDouble(),
+            child: image,
+          ),
+        ),
+      );
+    }
+    return SizedBox.expand(
+      child: FittedBox(
+        fit: fit,
+        child: SizedBox(
+          width: _fw.toDouble(),
+          height: _fh.toDouble(),
+          child: image,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
         actions: [
+          PopupMenuButton<ViewScaleMode>(
+            tooltip: 'View scale (local only; remote size is shared)',
+            initialValue: _scaleMode,
+            onSelected: (m) => setState(() => _scaleMode = m),
+            itemBuilder: (context) => [
+              for (final m in ViewScaleMode.values)
+                CheckedPopupMenuItem(
+                  value: m,
+                  checked: m == _scaleMode,
+                  child: Text(m.label),
+                ),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.aspect_ratio, size: 18),
+                  const SizedBox(width: 4),
+                  Text(_scaleMode.label),
+                ],
+              ),
+            ),
+          ),
           if (_lastError != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -586,28 +748,7 @@ class _SessionPageState extends State<SessionPage> {
           child: ColoredBox(
             key: _viewKey,
             color: Colors.black,
-            child: _frame == null
-                ? Center(
-                    child: Text(
-                      _lastError ?? 'Waiting for framebuffer…',
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                  )
-                : SizedBox.expand(
-                    child: FittedBox(
-                      fit: BoxFit.contain,
-                      child: SizedBox(
-                        width: _fw.toDouble(),
-                        height: _fh.toDouble(),
-                        child: RawImage(
-                          image: _frame,
-                          width: _fw.toDouble(),
-                          height: _fh.toDouble(),
-                          fit: BoxFit.fill,
-                        ),
-                      ),
-                    ),
-                  ),
+            child: _frameChild(),
           ),
         ),
       ),
