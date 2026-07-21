@@ -22,6 +22,8 @@ Usage: hh-version <command> [args]
   sync [--build N]             VERSION → Cargo.toml + pubspec.yaml
   set <X.Y.Z> [--build N]      Write VERSION, then sync
   bump patch|minor|major [--build N]
+  check-tag [TAG]              Fail unless TAG agrees with VERSION
+                               (TAG defaults to \$GITHUB_REF_NAME)
   tag [--rc N] [--allow-dirty] [--push]
                                Annotated tag vX.Y.Z or vX.Y.Z-rc.N
   release patch|minor|major [--yes] [--build N] [--allow-dirty] [--push]
@@ -125,6 +127,43 @@ require_clean() {
   fi
 }
 
+# Fail unless release tag agrees with VERSION (plan: trust tag / VERSION check).
+# Stable: vX.Y.Z  ↔  VERSION=X.Y.Z
+# RC:     vX.Y.Z-rc.N  ↔  VERSION=X.Y.Z  (tag-only; VERSION unchanged)
+cmd_check_tag() {
+  local tag="${1:-${GITHUB_REF_NAME:-}}"
+  if [[ -z "$tag" ]]; then
+    echo "error: check-tag needs TAG or GITHUB_REF_NAME" >&2
+    exit 1
+  fi
+  local ver base
+  ver="$(read_version)"
+  validate_semver "$ver"
+
+  if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-rc\.([0-9]+)$ ]]; then
+    base="${BASH_REMATCH[1]}"
+    if [[ "$base" != "$ver" ]]; then
+      echo "error: RC tag $tag base $base != VERSION $ver" >&2
+      exit 1
+    fi
+    echo "ok: tag $tag agrees with VERSION $ver (rcs)"
+    return 0
+  fi
+
+  if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    base="${BASH_REMATCH[1]}"
+    if [[ "$base" != "$ver" ]]; then
+      echo "error: stable tag $tag != VERSION $ver (expected v$ver)" >&2
+      exit 1
+    fi
+    echo "ok: tag $tag agrees with VERSION $ver (stable)"
+    return 0
+  fi
+
+  echo "error: tag must be vX.Y.Z or vX.Y.Z-rc.N (got '$tag')" >&2
+  exit 1
+}
+
 cmd_tag() {
   require_clean
   sync_mirrors
@@ -205,6 +244,9 @@ main() {
       cmd_bump "$1"
       ;;
     tag) cmd_tag ;;
+    check-tag)
+      cmd_check_tag "${1:-}"
+      ;;
     release)
       [[ $# -ge 1 ]] || { echo "usage: hh-version release patch|minor|major [--yes]" >&2; exit 1; }
       cmd_release "$1"

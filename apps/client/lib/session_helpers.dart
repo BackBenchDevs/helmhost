@@ -39,6 +39,34 @@ OpenSessionRef? findOpenByHostPort(
   return null;
 }
 
+/// Remove open refs by session id. Returns true if anything was removed.
+bool removeOpenBySessionId(List<OpenSessionRef> sessions, int sessionId) {
+  final before = sessions.length;
+  sessions.removeWhere((s) => s.id == sessionId);
+  return sessions.length != before;
+}
+
+/// Replace an open session id (reconnect). Returns false if [oldId] missing.
+bool replaceOpenSessionId(
+  List<OpenSessionRef> sessions, {
+  required int oldId,
+  required int newId,
+  String? host,
+  int? port,
+}) {
+  for (var i = 0; i < sessions.length; i++) {
+    final s = sessions[i];
+    if (s.id != oldId) continue;
+    sessions[i] = OpenSessionRef(
+      id: newId,
+      host: host ?? s.host,
+      port: port ?? s.port,
+    );
+    return true;
+  }
+  return false;
+}
+
 /// Library card model (from registry JSON).
 class LibraryCard {
   const LibraryCard({

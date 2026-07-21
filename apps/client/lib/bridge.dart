@@ -15,10 +15,10 @@ typedef _ConnectDart = Pointer<Utf8> Function(
     Pointer<Utf8>, int, Pointer<Utf8>, Pointer<Utf8>, int, int);
 typedef _PollNative = Pointer<Utf8> Function(Uint64);
 typedef _PollDart = Pointer<Utf8> Function(int);
-typedef _PtrNative = Pointer<Utf8> Function(Uint64, Int32, Int32, Uint8);
-typedef _PtrDart = Pointer<Utf8> Function(int, int, int, int);
-typedef _KeyNative = Pointer<Utf8> Function(Uint64, Uint8, Uint32);
-typedef _KeyDart = Pointer<Utf8> Function(int, int, int);
+typedef _PtrNative = Int32 Function(Uint64, Int32, Int32, Uint8);
+typedef _PtrDart = int Function(int, int, int, int);
+typedef _KeyNative = Int32 Function(Uint64, Uint8, Uint32);
+typedef _KeyDart = int Function(int, int, int);
 typedef _ClipNative = Pointer<Utf8> Function(Uint64, Pointer<Utf8>);
 typedef _ClipDart = Pointer<Utf8> Function(int, Pointer<Utf8>);
 typedef _CloseNative = Pointer<Utf8> Function(Uint64);
@@ -238,13 +238,13 @@ class HelmBridge {
   }
 
   void sendPointer(int sessionId, int x, int y, int buttons) {
-    final r = _take(_pointer(sessionId, x, y, buttons));
-    if (r.startsWith('ERR:')) throw StateError(r);
+    final rc = _pointer(sessionId, x, y, buttons);
+    if (rc != 0) throw StateError('hh_send_pointer failed');
   }
 
   void sendKey(int sessionId, bool down, int keysym) {
-    final r = _take(_key(sessionId, down ? 1 : 0, keysym));
-    if (r.startsWith('ERR:')) throw StateError(r);
+    final rc = _key(sessionId, down ? 1 : 0, keysym);
+    if (rc != 0) throw StateError('hh_send_key failed');
   }
 
   void sendClipboard(int sessionId, String text) {
