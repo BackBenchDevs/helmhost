@@ -67,11 +67,27 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: Flatten release files
+        run: |
+          mkdir -p release
+          # One file per basename; merge SHA256SUMS from all OS jobs.
+          : > release/SHA256SUMS
+          while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            if [[ "$base" == "SHA256SUMS" ]]; then
+              cat "$f" >> release/SHA256SUMS
+            else
+              cp "$f" "release/$base"
+            fi
+          done < <(find artifacts -type f -print0)
+          sort -u -o release/SHA256SUMS release/SHA256SUMS
+          ls -la release
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: dev-${{ github.sha }}
           name: dev-${{ github.sha }}
           prerelease: true
-          files: artifacts/**/*
+          files: release/*
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
