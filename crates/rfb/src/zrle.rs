@@ -180,7 +180,12 @@ fn decode_tiles(
     Ok(out)
 }
 
-fn read_cpixel(pf: &PixelFormat, cpixel: usize, data: &[u8], off: usize) -> Result<[u8; 4], String> {
+fn read_cpixel(
+    pf: &PixelFormat,
+    cpixel: usize,
+    data: &[u8],
+    off: usize,
+) -> Result<[u8; 4], String> {
     if data.len() < off + cpixel {
         return Err("zrle cpixel truncated".into());
     }
@@ -419,12 +424,7 @@ pub fn encode_zrle_solid_fixture(pf: &PixelFormat, w: u32, h: u32, rgb: [u8; 3])
 }
 
 /// Encode a solid ZRLE rect with a persistent compressor (multi-rect tests).
-pub fn encode_zrle_solid_with(
-    compressor: &mut Compress,
-    w: u32,
-    h: u32,
-    rgb: [u8; 3],
-) -> Vec<u8> {
+pub fn encode_zrle_solid_with(compressor: &mut Compress, w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
     let raw = solid_tile_bytes(w, h, rgb);
     let z = compress_sync(compressor, &raw);
     let mut out = Vec::with_capacity(4 + z.len());

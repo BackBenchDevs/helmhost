@@ -1,4 +1,4 @@
-# helmhost_client
+# helmhost
 
 A new Flutter project.
 

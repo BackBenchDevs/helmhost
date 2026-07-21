@@ -4,8 +4,8 @@ use crate::pixel_format::{raw_to_rgba, PixelFormat};
 use helmhost_core::{KeyEvent, PointerEvent, Rect};
 
 pub use crate::encoding::{
-    encoding_name, preferred_encodings, ENC_COPYRECT, ENC_DESKTOP_SIZE,
-    ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT, ENC_RAW, ENC_ZRLE,
+    encoding_name, preferred_encodings, ENC_COPYRECT, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE,
+    ENC_LAST_RECT, ENC_RAW, ENC_ZRLE,
 };
 
 pub const MSG_FRAMEBUFFER_UPDATE: u8 = 0;
@@ -90,7 +90,7 @@ pub fn encode_set_desktop_size(width: u16, height: u16) -> Vec<u8> {
     out.extend_from_slice(&height.to_be_bytes());
     out.push(1); // number of screens
     out.push(0); // pad
-    // Screen: id, x, y, w, h, flags
+                 // Screen: id, x, y, w, h, flags
     out.extend_from_slice(&0u32.to_be_bytes());
     out.extend_from_slice(&0u16.to_be_bytes());
     out.extend_from_slice(&0u16.to_be_bytes());

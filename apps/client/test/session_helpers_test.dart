@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:helmhost_client/library/library_card_widgets.dart';
-import 'package:helmhost_client/session_helpers.dart';
+import 'package:helmhost/library/library_card_widgets.dart';
+import 'package:helmhost/session_helpers.dart';
 
 void main() {
   group('sessionKey', () {
@@ -110,6 +110,94 @@ void main() {
       expect(ViewScaleMode.fill.boxFit, BoxFit.contain);
       expect(ViewScaleMode.fill.usesRemoteResize, isTrue);
       expect(ViewScaleMode.fit.usesRemoteResize, isFalse);
+    });
+  });
+
+  group('resolveQuickConnect', () {
+    const lab = ConnectionProfileCard(
+      id: 'lab',
+      name: 'Lab',
+      domain: 'lab.internal',
+      defaultDisplay: 1,
+    );
+
+    test('bare short host qualifies and applies default display', () {
+      final r = resolveQuickConnect(
+        rawInput: 'greg',
+        profiles: const [lab],
+        filterProfileId: 'lab',
+      );
+      expect(r.error, isNull);
+      expect(r.target!.connectHost, 'greg.lab.internal');
+      expect(r.target!.port, 5901);
+      expect(r.target!.displayNumber, 1);
+      expect(r.target!.entryHost, 'greg');
+      expect(r.target!.profileId, 'lab');
+    });
+
+    test('short:display qualifies host and keeps explicit display', () {
+      final r = resolveQuickConnect(
+        rawInput: 'greg:1',
+        profiles: const [lab],
+        filterProfileId: 'lab',
+      );
+      expect(r.error, isNull);
+      expect(r.target!.connectHost, 'greg.lab.internal');
+      expect(r.target!.port, 5901);
+      expect(r.target!.displayNumber, 1);
+    });
+
+    test('short::port qualifies host and keeps raw port', () {
+      final r = resolveQuickConnect(
+        rawInput: 'greg::5902',
+        profiles: const [lab],
+        filterProfileId: 'lab',
+      );
+      expect(r.error, isNull);
+      expect(r.target!.connectHost, 'greg.lab.internal');
+      expect(r.target!.port, 5902);
+      expect(r.target!.displayNumber, isNull);
+    });
+
+    test('empty domain profile errors', () {
+      const bad = ConnectionProfileCard(id: 'x', name: 'X', domain: '');
+      final r = resolveQuickConnect(
+        rawInput: 'pc',
+        profiles: const [bad],
+        filterProfileId: 'x',
+      );
+      expect(r.error, contains('no domain'));
+    });
+  });
+
+  group('connectPortForCard', () {
+    test('uses resolved display when card display unset', () {
+      const card = LibraryCard(id: 'a:5900', host: 'pc', port: 5900);
+      expect(
+        connectPortForCard(card: card, resolved: {'display_number': 1}),
+        5901,
+      );
+    });
+
+    test('keeps card port when display pinned', () {
+      const card = LibraryCard(
+        id: 'a:5900',
+        host: 'pc',
+        port: 5900,
+        displayNumber: 0,
+      );
+      expect(
+        connectPortForCard(card: card, resolved: {'display_number': 1}),
+        5900,
+      );
+    });
+  });
+
+  group('parseDefaultDisplayField', () {
+    test('parses and rejects', () {
+      expect(parseDefaultDisplayField('1'), 1);
+      expect(parseDefaultDisplayField(''), isNull);
+      expect(parseDefaultDisplayField('x'), isNull);
     });
   });
 }

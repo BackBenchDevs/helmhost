@@ -1,7 +1,7 @@
 //! Framebuffer rectangle bounds (TigerVNC: "Rect too big").
 
-use crate::messages::FramebufferRectHeader;
 use crate::encoding::constants::{ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT};
+use crate::messages::FramebufferRectHeader;
 
 /// Returns true when the encoding uses rect w×h as desktop metrics, not FB damage.
 pub fn is_geometry_pseudo_encoding(enc: i32) -> bool {
@@ -41,7 +41,7 @@ pub fn rect_fits_framebuffer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encoding::constants::{ENC_RAW, ENC_DESKTOP_SIZE};
+    use crate::encoding::constants::{ENC_DESKTOP_SIZE, ENC_RAW};
 
     fn hdr(x: u16, y: u16, w: u16, h: u16, encoding: i32) -> FramebufferRectHeader {
         FramebufferRectHeader {

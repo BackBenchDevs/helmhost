@@ -1,8 +1,8 @@
 //! Public-API tests for async protocol traits via mocks.
 
 use helmhost_core::{
-    ConnectTarget, Creds, FramebufferCache, ProtocolId, SessionCommand, SessionEvent,
-    SessionFactory, SessionHandle, SessionId, BoxFuture,
+    BoxFuture, ConnectTarget, Creds, FramebufferCache, ProtocolId, SessionCommand, SessionEvent,
+    SessionFactory, SessionHandle, SessionId,
 };
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;

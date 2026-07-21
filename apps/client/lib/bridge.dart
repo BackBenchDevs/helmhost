@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart';
+
+import 'storage/app_paths.dart';
 
 typedef _HelloNative = Pointer<Utf8> Function();
 typedef _HelloDart = Pointer<Utf8> Function();
@@ -72,6 +73,14 @@ class HelmBridge {
             .lookupFunction<_PathNative, _PathDart>('hh_registry_merge_json'),
         _regExport =
             _lib.lookupFunction<_VoidNative, _VoidDart>('hh_registry_export'),
+        _profileList =
+            _lib.lookupFunction<_VoidNative, _VoidDart>('hh_profile_list'),
+        _profileUpsert = _lib
+            .lookupFunction<_PathNative, _PathDart>('hh_profile_upsert_json'),
+        _profileRemove =
+            _lib.lookupFunction<_PathNative, _PathDart>('hh_profile_remove'),
+        _regResolve =
+            _lib.lookupFunction<_PathNative, _PathDart>('hh_registry_resolve'),
         _fbSize = _lib.lookupFunction<_FbSizeNative, _FbSizeDart>('hh_fb_size'),
         _fbCopy = _lib.lookupFunction<_FbCopyNative, _FbCopyDart>('hh_fb_copy'),
         _requestDesktopSize = _lib.lookupFunction<_DesktopSizeNative, _DesktopSizeDart>(
@@ -97,6 +106,10 @@ class HelmBridge {
   final _PathDart _regRemove;
   final _PathDart _regMerge;
   final _VoidDart _regExport;
+  final _VoidDart _profileList;
+  final _PathDart _profileUpsert;
+  final _PathDart _profileRemove;
+  final _PathDart _regResolve;
   final _FbSizeDart _fbSize;
   final _FbCopyDart _fbCopy;
   final _DesktopSizeDart _requestDesktopSize;
@@ -149,8 +162,7 @@ class HelmBridge {
   String hello() => _take(_hello());
 
   Future<void> initRegistry() async {
-    final dir = await getApplicationSupportDirectory();
-    final path = '${dir.path}/connections.json';
+    final path = await AppPaths.connectionsJsonPath();
     final c = path.toNativeUtf8();
     try {
       final r = _take(_regPath(c));
@@ -160,12 +172,7 @@ class HelmBridge {
     }
   }
 
-  Future<Directory> thumbsDir() async {
-    final dir = await getApplicationSupportDirectory();
-    final t = Directory('${dir.path}/thumbs');
-    if (!await t.exists()) await t.create(recursive: true);
-    return t;
-  }
+  Future<Directory> thumbsDir() async => AppPaths.thumbsDir();
 
   int connect(
     String host,
@@ -332,6 +339,47 @@ class HelmBridge {
     try {
       final r = _take(_regMerge(c));
       if (r.startsWith('ERR:')) throw StateError(r);
+    } finally {
+      malloc.free(c);
+    }
+  }
+
+  List<dynamic> profileList() {
+    final r = _take(_profileList());
+    if (r.startsWith('ERR:')) throw StateError(r);
+    return jsonDecode(r) as List<dynamic>;
+  }
+
+  void profileUpsertJson(Map<String, dynamic> profile) {
+    final encoded = jsonEncode(profile);
+    // ignore: avoid_print — temporary diagnose for default_display persistence
+    debugPrint('[bridge] profileUpsertJson $encoded');
+    final c = encoded.toNativeUtf8();
+    try {
+      final r = _take(_profileUpsert(c));
+      if (r.startsWith('ERR:')) throw StateError(r);
+      debugPrint('[bridge] profileUpsertJson ok');
+    } finally {
+      malloc.free(c);
+    }
+  }
+
+  void profileRemove(String id) {
+    final c = id.toNativeUtf8();
+    try {
+      final r = _take(_profileRemove(c));
+      if (r.startsWith('ERR:')) throw StateError(r);
+    } finally {
+      malloc.free(c);
+    }
+  }
+
+  Map<String, dynamic> registryResolve(String id) {
+    final c = id.toNativeUtf8();
+    try {
+      final r = _take(_regResolve(c));
+      if (r.startsWith('ERR:')) throw StateError(r);
+      return Map<String, dynamic>.from(jsonDecode(r) as Map);
     } finally {
       malloc.free(c);
     }

@@ -11,12 +11,13 @@ pub mod session;
 pub use fb_cache::FramebufferCache;
 pub use focus::InputFocus;
 pub use protocol::{
-    BoxFuture, ConnectTarget, Creds, DEFAULT_QUEUE_CAPACITY, KeyEvent, PointerEvent, ProtocolId,
-    Rect, SessionCommand, SessionEvent, SessionFactory, SessionHandle, NEED_PASSWORD,
+    BoxFuture, ConnectTarget, Creds, KeyEvent, PointerEvent, ProtocolId, Rect, SessionCommand,
+    SessionEvent, SessionFactory, SessionHandle, DEFAULT_QUEUE_CAPACITY, NEED_PASSWORD,
     NEED_USERNAME_PASSWORD,
 };
 pub use registry::{
-    display_from_port, port_from_display, ConnectionEntry, ConnectionRegistry,
+    display_from_port, host_matches_domain, normalize_domain, port_from_display, qualify_host,
+    short_host, ConnectionEntry, ConnectionProfile, ConnectionRegistry, ResolvedConnectionSettings,
 };
 pub use runtime::HelmRuntime;
 pub use session::{SessionId, SessionManager};

@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
+import 'app_paths.dart';
 
 /// Thrown when credential persistence fails.
 class CredentialStoreException implements Exception {
@@ -19,7 +19,7 @@ abstract class ICredentialStore {
   Future<void> deletePassword(String entryId);
 }
 
-/// File-backed store under Application Support.
+/// File-backed store under `~/.helmhost/credentials.vault`.
 ///
 /// Used instead of Keychain so Debug builds with ad-hoc signing
 /// (`CODE_SIGN_IDENTITY = "-"`) can save passwords without a
@@ -31,13 +31,13 @@ class FileCredentialStore implements ICredentialStore {
   File? _file;
   Map<String, String>? _cache;
 
-  static const _fileName = 'credentials.vault';
+  static const _fileName = AppPaths.credentialsFileName;
   // Obfuscation only — not a substitute for Keychain on signed Release builds.
   static const _xorKey = 'helmhost.local.cred.v1';
 
   Future<File> _resolveFile() async {
     if (_file != null) return _file!;
-    final root = _rootOverride ?? await getApplicationSupportDirectory();
+    final root = _rootOverride ?? await AppPaths.root();
     _file = File('${root.path}/$_fileName');
     return _file!;
   }

@@ -1,7 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:helmhost_client/session/session_ipc.dart';
-import 'package:helmhost_client/session/session_link_stats.dart';
-import 'package:helmhost_client/session_helpers.dart';
+import 'package:helmhost/session/credentials.dart';
+import 'package:helmhost/session/session_ipc.dart';
+import 'package:helmhost/session/session_link_stats.dart';
+import 'package:helmhost/session_helpers.dart';
+import 'package:helmhost/storage/credential_store.dart';
 
 void main() {
   group('removeOpenBySessionId / replaceOpenSessionId', () {
@@ -65,6 +67,111 @@ void main() {
       expect(SessionConnState.connecting.label, 'Connecting');
       expect(SessionConnState.live.label, 'Live');
       expect(SessionConnState.timedOut.label, 'Timed out');
+    });
+  });
+
+  group('resolvePassword / persistEntryCredentials', () {
+    test('session password preferred over vault', () async {
+      final store = MemoryCredentialStore();
+      await store.writePassword('h:5901', 'vault-secret');
+      expect(
+        await resolvePassword(
+          store: store,
+          entryId: 'h:5901',
+          sessionPassword: 'session-secret',
+        ),
+        'session-secret',
+      );
+      expect(
+        await resolvePassword(store: store, entryId: 'h:5901'),
+        'vault-secret',
+      );
+    });
+
+    test('savePassword false does not delete vault', () async {
+      final store = MemoryCredentialStore();
+      await store.writePassword('h:5901', 'keep-me');
+      await persistEntryCredentials(
+        store,
+        'h:5901',
+        password: null,
+        savePassword: false,
+      );
+      expect(await store.readPassword('h:5901'), 'keep-me');
+    });
+
+    test('clearPassword deletes vault entry', () async {
+      final store = MemoryCredentialStore();
+      await store.writePassword('h:5901', 'gone');
+      await persistEntryCredentials(
+        store,
+        'h:5901',
+        savePassword: false,
+        clearPassword: true,
+      );
+      expect(await store.readPassword('h:5901'), isNull);
+    });
+
+    test('savePassword writes vault', () async {
+      final store = MemoryCredentialStore();
+      await persistEntryCredentials(
+        store,
+        'h:5901',
+        password: 'new',
+        savePassword: true,
+      );
+      expect(await store.readPassword('h:5901'), 'new');
+    });
+
+    test('profile vault used when entry has no password', () async {
+      final store = MemoryCredentialStore();
+      await store.writePassword(profileVaultKey('lab'), 'group-secret');
+      expect(
+        await resolvePassword(
+          store: store,
+          entryId: 'pc01.lab.internal:5900',
+          profileId: 'lab',
+        ),
+        'group-secret',
+      );
+    });
+
+    test('entry password beats profile password', () async {
+      final store = MemoryCredentialStore();
+      await store.writePassword('pc01.lab.internal:5900', 'host-secret');
+      await store.writePassword(profileVaultKey('lab'), 'group-secret');
+      expect(
+        await resolvePassword(
+          store: store,
+          entryId: 'pc01.lab.internal:5900',
+          profileId: 'lab',
+        ),
+        'host-secret',
+      );
+    });
+
+    test('persistProfileCredentials writes profile vault key', () async {
+      final store = MemoryCredentialStore();
+      await persistProfileCredentials(
+        store,
+        'lab',
+        password: 'shared',
+        savePassword: true,
+      );
+      expect(await store.readPassword(profileVaultKey('lab')), 'shared');
+    });
+  });
+
+  group('isAuthError / authErrorLabel', () {
+    test('NEED_PASSWORD detection', () {
+      expect(isAuthError(StateError('NEED_PASSWORD')), isTrue);
+      expect(isAuthError(StateError('NEED_USERNAME_PASSWORD')), isTrue);
+      expect(isAuthError(StateError('connection refused')), isFalse);
+      expect(authErrorLabel(StateError('NEED_PASSWORD')), 'Password required');
+      expect(
+        authErrorLabel(StateError('NEED_USERNAME_PASSWORD')),
+        'Username and password required',
+      );
     });
   });
 }

@@ -4,7 +4,9 @@ use crate::handshake::{SEC_NONE, SEC_VNC_AUTH};
 use crate::io::{read_exact, write_all};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, Error as TlsError, RootCertStore, SignatureScheme};
+use rustls::{
+    ClientConfig, DigitallySignedStruct, Error as TlsError, RootCertStore, SignatureScheme,
+};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -39,8 +41,7 @@ pub async fn negotiate_vencrypt_subtype<S: AsyncRead + AsyncWrite + Unpin>(
     let n = nbuf[0] as usize;
     if n == 0 {
         return Err(
-            "VeNCrypt: server offered zero subtypes (try disabling Prefer VeNCrypt/TLS)"
-                .into(),
+            "VeNCrypt: server offered zero subtypes (try disabling Prefer VeNCrypt/TLS)".into(),
         );
     }
     let raw = read_exact(stream, n * 4).await?;

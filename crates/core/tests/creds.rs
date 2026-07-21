@@ -13,7 +13,10 @@ fn debug_redacts_password() {
         !rendered.contains("s3cret-password"),
         "Debug leaked password: {rendered}"
     );
-    assert!(!rendered.contains("alice"), "Debug leaked username: {rendered}");
+    assert!(
+        !rendered.contains("alice"),
+        "Debug leaked username: {rendered}"
+    );
     assert!(rendered.contains("***"));
 }
 

@@ -45,7 +45,6 @@ impl std::fmt::Debug for Creds {
 pub const NEED_PASSWORD: &str = "NEED_PASSWORD";
 pub const NEED_USERNAME_PASSWORD: &str = "NEED_USERNAME_PASSWORD";
 
-
 /// Damage / framebuffer rectangle (top-left origin).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
@@ -90,18 +89,28 @@ pub enum SessionCommand {
     Pointer(PointerEvent),
     Key(KeyEvent),
     CutText(String),
-    RequestUpdate { incremental: bool },
+    RequestUpdate {
+        incremental: bool,
+    },
     /// TigerVNC RemoteResize: request remote FB = w×h (ExtendedDesktopSize).
-    SetDesktopSize { w: u32, h: u32 },
+    SetDesktopSize {
+        w: u32,
+        h: u32,
+    },
     Close,
 }
 
 /// Session → app events (reader/decode tasks produce these).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
-    DesktopResize { w: u32, h: u32 },
+    DesktopResize {
+        w: u32,
+        h: u32,
+    },
     /// Framebuffer region changed; pixels live in [`SessionHandle::framebuffer`].
-    FramebufferDirty { rect: Rect },
+    FramebufferDirty {
+        rect: Rect,
+    },
     Bell,
     Clipboard(String),
     Disconnected,

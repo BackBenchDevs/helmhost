@@ -5,8 +5,8 @@ use helmhost_rfb::fb_cache::FramebufferCache;
 use helmhost_rfb::messages::{
     apply_raw_rect, encode_client_cut_text, encode_fb_update_request, encode_key_event,
     encode_pointer_event, parse_fb_update_header, parse_rect_header, preferred_encodings,
-    FramebufferRectHeader, ENC_COPYRECT, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT,
-    ENC_RAW, ENC_ZRLE, MSG_FRAMEBUFFER_UPDATE,
+    FramebufferRectHeader, ENC_COPYRECT, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE,
+    ENC_LAST_RECT, ENC_RAW, ENC_ZRLE, MSG_FRAMEBUFFER_UPDATE,
 };
 use helmhost_rfb::pixel_format::{raw_to_rgba, PixelFormat};
 use helmhost_rfb::zrle::decode_zrle;
@@ -131,17 +131,7 @@ fn fb_copy_solid_color() {
     let blue = vec![0u8, 0, 255, 255];
     for y in 0..2 {
         for x in 0..2 {
-            cache
-                .put_damage(
-                    Rect {
-                        x,
-                        y,
-                        w: 1,
-                        h: 1,
-                    },
-                    &blue,
-                )
-                .unwrap();
+            cache.put_damage(Rect { x, y, w: 1, h: 1 }, &blue).unwrap();
         }
     }
     let mut out = vec![0u8; 16];
@@ -180,7 +170,6 @@ fn zrle_fixture_file() {
     assert_eq!(rgba.len(), 16);
     assert_eq!(&rgba[0..3], &[10, 20, 30]);
 }
-
 
 #[test]
 fn client_cut_text_encode() {

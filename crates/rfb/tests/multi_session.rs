@@ -1,15 +1,18 @@
 //! Two concurrent mock sessions + close + SessionManager tracking.
 
 use helmhost_core::{
-    Creds, HelmRuntime, SessionCommand, SessionEvent, SessionId, SessionManager, DEFAULT_QUEUE_CAPACITY,
+    Creds, HelmRuntime, SessionCommand, SessionEvent, SessionId, SessionManager,
+    DEFAULT_QUEUE_CAPACITY,
 };
-use helmhost_rfb::session::connect_any;
 use helmhost_rfb::handshake::{SEC_NONE, SEC_RESULT_OK};
-use helmhost_rfb::messages::{CLIENT_SET_ENCODINGS, CLIENT_SET_PIXEL_FORMAT, ENC_RAW, MSG_FRAMEBUFFER_UPDATE};
+use helmhost_rfb::messages::{
+    CLIENT_SET_ENCODINGS, CLIENT_SET_PIXEL_FORMAT, ENC_RAW, MSG_FRAMEBUFFER_UPDATE,
+};
 use helmhost_rfb::pixel_format::PixelFormat;
+use helmhost_rfb::session::connect_any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
@@ -246,4 +249,3 @@ async fn unknown_zero_area_encoding_skipped() {
     handle.close().await.ok();
     server.await.unwrap();
 }
-

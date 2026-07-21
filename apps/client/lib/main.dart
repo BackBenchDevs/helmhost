@@ -48,6 +48,7 @@ Future<void> main(List<String> args) async {
             ? int.tryParse(entryId.split(':').last) ?? 5900
             : 5900);
     final username = winArgs['username'] as String?;
+    final profileId = winArgs['profile_id'] as String?;
     final preferVencrypt = winArgs['prefer_vencrypt'] as bool? ?? false;
     final acceptInvalidCerts =
         winArgs['accept_invalid_certs'] as bool? ?? false;
@@ -59,6 +60,7 @@ Future<void> main(List<String> args) async {
       host: host,
       port: port,
       username: username,
+      profileId: profileId,
       preferVencrypt: preferVencrypt,
       acceptInvalidCerts: acceptInvalidCerts,
       themeMode: prefs.themeMode,
@@ -82,12 +84,14 @@ class HubApp extends StatefulWidget {
 class _HubAppState extends State<HubApp> {
   late ThemeMode _themeMode;
   late LibraryViewMode _viewMode;
+  late SessionShell _sessionShell;
 
   @override
   void initState() {
     super.initState();
     _themeMode = widget.prefs.themeMode;
     _viewMode = widget.prefs.libraryViewMode;
+    _sessionShell = widget.prefs.sessionShell;
   }
 
   Future<void> _setTheme(ThemeMode mode) async {
@@ -98,6 +102,11 @@ class _HubAppState extends State<HubApp> {
   Future<void> _setViewMode(LibraryViewMode mode) async {
     setState(() => _viewMode = mode);
     await widget.prefs.setLibraryViewMode(mode);
+  }
+
+  Future<void> _setSessionShell(SessionShell shell) async {
+    setState(() => _sessionShell = shell);
+    await widget.prefs.setSessionShell(shell);
   }
 
   @override
@@ -112,6 +121,9 @@ class _HubAppState extends State<HubApp> {
         onThemeModeChanged: _setTheme,
         viewMode: _viewMode,
         onViewModeChanged: _setViewMode,
+        sessionShell: _sessionShell,
+        onSessionShellChanged: _setSessionShell,
+        prefs: widget.prefs,
       ),
     );
   }
@@ -125,6 +137,7 @@ class SessionApp extends StatelessWidget {
     required this.host,
     required this.port,
     this.entryId,
+    this.profileId,
     this.username,
     this.preferVencrypt = false,
     this.acceptInvalidCerts = false,
@@ -137,6 +150,7 @@ class SessionApp extends StatelessWidget {
   final String host;
   final int port;
   final String? entryId;
+  final String? profileId;
   final String? username;
   final bool preferVencrypt;
   final bool acceptInvalidCerts;
@@ -154,6 +168,7 @@ class SessionApp extends StatelessWidget {
         sessionId: sessionId,
         title: title,
         entryId: entryId,
+        profileId: profileId,
         host: host,
         port: port,
         username: username,

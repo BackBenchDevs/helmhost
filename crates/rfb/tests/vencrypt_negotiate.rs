@@ -1,7 +1,7 @@
 //! VeNCrypt subtype negotiation (pre-TLS) fixture.
 
 use helmhost_rfb::vencrypt::{negotiate_vencrypt_subtype, VENCRYPT_TLSNONE, VENCRYPT_TLSVNC};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
+use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn vencrypt_negotiate_tlsnone() {
@@ -53,9 +53,7 @@ async fn vencrypt_negotiate_prefers_tlsvnc_with_password() {
         server.write_all(&[1]).await.unwrap();
     });
 
-    let subtype = negotiate_vencrypt_subtype(&mut client, true)
-        .await
-        .unwrap();
+    let subtype = negotiate_vencrypt_subtype(&mut client, true).await.unwrap();
     assert_eq!(subtype, VENCRYPT_TLSVNC);
     server_task.await.unwrap();
 }
