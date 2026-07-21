@@ -1,0 +1,37 @@
+# Helmhost milestone map — Waypoint-style era / codename binding.
+# MAJOR → era (Lighthouse for all 0.x). MINOR → one track + one codename.
+# PATCH keeps the same codename. Do not rename on patch.
+
+era = "Lighthouse"
+product = "Helmhost"
+product_id = "helmhost"
+
+[[milestone]]
+req = ">=0.1.0, <0.2.0"
+codename = "Lantern"
+release_tag = "lantern"
+description = "Foundation — first remote desktop light"
+
+[[milestone]]
+req = ">=0.2.0, <0.3.0"
+codename = "Range"
+release_tag = "range"
+description = "Lighthouse 1 — Hub multi-session channel"
+
+[[milestone]]
+req = ">=0.3.0, <0.4.0"
+codename = "Sector"
+release_tag = "sector"
+description = "Lighthouse 2 — Grab / InputFocus arcs"
+
+[[milestone]]
+req = ">=0.4.0, <0.5.0"
+codename = "Beacon"
+release_tag = "beacon"
+description = "Lighthouse 3 — SSH / tunnel approach"
+
+[[milestone]]
+req = ">=0.5.0, <0.6.0"
+codename = "Buoy"
+release_tag = "buoy"
+description = "Lighthouse 4 — saved host library"

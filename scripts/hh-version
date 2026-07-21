@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # hh-version — single CLI for Helmhost version SSOT (VERSION) + mirrors + git tags.
 # Humans do not hand-edit Cargo.toml / pubspec version fields.
+# Codenames / era resolve from repo-root codenames.toml (Waypoint-style).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION_FILE="$ROOT/VERSION"
+CODENAMES_FILE="$ROOT/codenames.toml"
 CARGO_TOML="$ROOT/Cargo.toml"
 PUBSPEC="$ROOT/apps/client/pubspec.yaml"
 
@@ -13,23 +15,24 @@ ALLOW_DIRTY=0
 PUSH=0
 YES=0
 RC=""
+SHOW_MODE="short" # short | all | json
 
 usage() {
   cat <<'EOF'
 Usage: hh-version <command> [args]
 
-  show                         Print VERSION and mirrored Cargo/pubspec
+  show [-a|--all] [--json]     Product version line (default short)
   sync [--build N]             VERSION → Cargo.toml + pubspec.yaml
   set <X.Y.Z> [--build N]      Write VERSION, then sync
   bump patch|minor|major [--build N]
   check-tag [TAG]              Fail unless TAG agrees with VERSION
-                               (TAG defaults to \$GITHUB_REF_NAME)
+                               (TAG defaults to $GITHUB_REF_NAME)
   tag [--rc N] [--allow-dirty] [--push]
                                Annotated tag vX.Y.Z or vX.Y.Z-rc.N
   release patch|minor|major [--yes] [--build N] [--allow-dirty] [--push]
                                bump + sync + stable tag (dry-run unless --yes)
 
-SSOT is VERSION. RC tags do not change VERSION (tag only).
+SSOT is VERSION. Era/codename from codenames.toml. RC tags do not change VERSION.
 EOF
 }
 
@@ -49,23 +52,216 @@ validate_semver() {
   fi
 }
 
+# Compare X.Y.Z as integers: prints -1 / 0 / 1 (a < b / equal / a > b)
+semver_cmp() {
+  local a="$1" b="$2"
+  local a0 a1 a2 b0 b1 b2
+  IFS=. read -r a0 a1 a2 <<<"$a"
+  IFS=. read -r b0 b1 b2 <<<"$b"
+  if ((a0 < b0)); then printf '%s\n' -1; return; fi
+  if ((a0 > b0)); then printf '%s\n' 1; return; fi
+  if ((a1 < b1)); then printf '%s\n' -1; return; fi
+  if ((a1 > b1)); then printf '%s\n' 1; return; fi
+  if ((a2 < b2)); then printf '%s\n' -1; return; fi
+  if ((a2 > b2)); then printf '%s\n' 1; return; fi
+  printf '%s\n' 0
+}
+
+semver_ge() {
+  local c
+  c="$(semver_cmp "$1" "$2")"
+  [[ "$c" -ge 0 ]]
+}
+
+semver_lt() {
+  local c
+  c="$(semver_cmp "$1" "$2")"
+  [[ "$c" -lt 0 ]]
+}
+
+# Parse ">=X.Y.Z, <A.B.C" → sets BOUND_LO BOUND_HI
+parse_req() {
+  local req="$1"
+  BOUND_LO=""
+  BOUND_HI=""
+  if [[ "$req" =~ \>\=([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    BOUND_LO="${BASH_REMATCH[1]}"
+  fi
+  if [[ "$req" =~ \<([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    BOUND_HI="${BASH_REMATCH[1]}"
+  fi
+  if [[ -z "$BOUND_LO" || -z "$BOUND_HI" ]]; then
+    echo "error: bad milestone req '$req'" >&2
+    exit 1
+  fi
+}
+
+read_codenames_meta() {
+  if [[ ! -f "$CODENAMES_FILE" ]]; then
+    echo "error: missing $CODENAMES_FILE" >&2
+    exit 1
+  fi
+  PRODUCT="$(grep -E '^product[[:space:]]*=' "$CODENAMES_FILE" | head -1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/')"
+  PRODUCT_ID="$(grep -E '^product_id[[:space:]]*=' "$CODENAMES_FILE" | head -1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/')"
+  ERA="$(grep -E '^era[[:space:]]*=' "$CODENAMES_FILE" | head -1 | sed -E 's/.*=[[:space:]]*"([^"]+)".*/\1/')"
+  PRODUCT="${PRODUCT:-Helmhost}"
+  PRODUCT_ID="${PRODUCT_ID:-helmhost}"
+  ERA="${ERA:-Lighthouse}"
+}
+
+# Resolve milestone for semver into CODENAME RELEASE_TAG DESCRIPTION
+resolve_milestone() {
+  local ver="$1"
+  validate_semver "$ver"
+  read_codenames_meta
+
+  CODENAME=""
+  RELEASE_TAG=""
+  DESCRIPTION=""
+
+  local in_block=0 req="" cn="" rt="" desc=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" =~ ^\[\[milestone\]\] ]]; then
+      if [[ "$in_block" -eq 1 && -n "$req" ]]; then
+        parse_req "$req"
+        if semver_ge "$ver" "$BOUND_LO" && semver_lt "$ver" "$BOUND_HI"; then
+          CODENAME="$cn"
+          RELEASE_TAG="$rt"
+          DESCRIPTION="$desc"
+          return 0
+        fi
+      fi
+      in_block=1
+      req=""
+      cn=""
+      rt=""
+      desc=""
+      continue
+    fi
+    [[ "$in_block" -eq 1 ]] || continue
+    if [[ "$line" =~ ^req[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
+      req="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^codename[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
+      cn="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^release_tag[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
+      rt="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^description[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
+      desc="${BASH_REMATCH[1]}"
+    fi
+  done <"$CODENAMES_FILE"
+
+  if [[ "$in_block" -eq 1 && -n "$req" ]]; then
+    parse_req "$req"
+    if semver_ge "$ver" "$BOUND_LO" && semver_lt "$ver" "$BOUND_HI"; then
+      CODENAME="$cn"
+      RELEASE_TAG="$rt"
+      DESCRIPTION="$desc"
+      return 0
+    fi
+  fi
+
+  echo "error: no milestone in $CODENAMES_FILE for $ver" >&2
+  return 1
+}
+
+build_meta() {
+  local sha dirty=false
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    if [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
+      dirty=true
+      BUILD_ID="${sha}-dirty"
+    else
+      BUILD_ID="$sha"
+    fi
+  else
+    BUILD_ID="unknown"
+    dirty=false
+  fi
+  DIRTY="$dirty"
+  BUILT_AT_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  BUILT_AT_LOCAL="$(date '+%A, %d %b %Y, %I:%M %p %z')"
+  # date +%z → +0530; pretty → +05:30
+  local z
+  z="$(date '+%z')"
+  if [[ "$z" =~ ^([+-][0-9]{2})([0-9]{2})$ ]]; then
+    TIMEZONE="${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+  else
+    TIMEZONE="$z"
+  fi
+}
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  printf '%s' "$s"
+}
+
+format_short_line() {
+  local ver="$1"
+  printf '%s - %s (v%s - %s) - %s\n' \
+    "$PRODUCT" "$CODENAME" "$ver" "$BUILD_ID" "$BUILT_AT_LOCAL"
+}
+
+cmd_show() {
+  local ver
+  ver="$(read_version)"
+  resolve_milestone "$ver"
+  build_meta
+
+  case "$SHOW_MODE" in
+    short)
+      format_short_line "$ver"
+      ;;
+    all)
+      format_short_line "$ver"
+      printf 'release:     %s\n' "$RELEASE_TAG"
+      printf 'description: %s\n' "$DESCRIPTION"
+      printf 'era:         %s\n' "$ERA"
+      printf 'semver:      %s\n' "$ver"
+      printf 'tag:         v%s\n' "$ver"
+      printf 'build:       %s\n' "$BUILD_ID"
+      printf 'dirty:       %s\n' "$DIRTY"
+      printf 'built_utc:   %s\n' "$BUILT_AT_UTC"
+      printf 'timezone:    %s\n' "$TIMEZONE"
+      echo -n "Cargo:       "
+      grep -A5 '^\[workspace.package\]' "$CARGO_TOML" | grep '^version' | head -1 || echo "(missing)"
+      echo -n "pubspec:     "
+      grep '^version:' "$PUBSPEC" | head -1
+      ;;
+    json)
+      printf '{\n'
+      printf '  "name": "%s",\n' "$(json_escape "$PRODUCT_ID")"
+      printf '  "semver": "%s",\n' "$(json_escape "$ver")"
+      printf '  "tag": "v%s",\n' "$(json_escape "$ver")"
+      printf '  "era": "%s",\n' "$(json_escape "$ERA")"
+      printf '  "codename": "%s",\n' "$(json_escape "$CODENAME")"
+      printf '  "release_tag": "%s",\n' "$(json_escape "$RELEASE_TAG")"
+      printf '  "description": "%s",\n' "$(json_escape "$DESCRIPTION")"
+      printf '  "build_id": "%s",\n' "$(json_escape "$BUILD_ID")"
+      printf '  "dirty": %s,\n' "$DIRTY"
+      printf '  "built_at_utc": "%s",\n' "$(json_escape "$BUILT_AT_UTC")"
+      printf '  "built_at_local": "%s",\n' "$(json_escape "$BUILT_AT_LOCAL")"
+      printf '  "timezone": "%s"\n' "$(json_escape "$TIMEZONE")"
+      printf '}\n'
+      ;;
+  esac
+}
+
 sync_mirrors() {
   local ver
   ver="$(read_version)"
   validate_semver "$ver"
 
-  # Cargo.toml: [workspace.package] version = "..."
   if grep -q '^\[workspace.package\]' "$CARGO_TOML"; then
-    # Replace first version = "..." after [workspace.package] — simple whole-file for version.workspace packages
     perl -i -0pe 's/(\[workspace\.package\]\s*\n(?:.*\n)*?version\s*=\s*")[^"]+(")/${1}'"$ver"'${2}/' "$CARGO_TOML"
-    # Also top-level if present without workspace.package block match — ensure package versions use workspace
   else
     echo "error: Cargo.toml missing [workspace.package]" >&2
     exit 1
   fi
 
-  # If version.workspace is used, also set workspace.package.version (done above).
-  # pubspec: version: X.Y.Z+BUILD
   if [[ "$(uname)" == Darwin ]]; then
     sed -i '' -E "s/^version: .*/version: ${ver}+${BUILD}/" "$PUBSPEC"
   else
@@ -73,16 +269,6 @@ sync_mirrors() {
   fi
 
   echo "synced: VERSION=$ver  pubspec=${ver}+${BUILD}  Cargo workspace=$ver"
-}
-
-cmd_show() {
-  local ver
-  ver="$(read_version)"
-  echo "VERSION:  $ver"
-  echo -n "Cargo:    "
-  grep -A5 '^\[workspace.package\]' "$CARGO_TOML" | grep '^version' | head -1 || echo "(missing)"
-  echo -n "pubspec:  "
-  grep '^version:' "$PUBSPEC" | head -1
 }
 
 parse_global_flags() {
@@ -109,6 +295,14 @@ parse_global_flags() {
         RC="$2"
         shift 2
         ;;
+      -a|--all)
+        SHOW_MODE="all"
+        shift
+        ;;
+      --json)
+        SHOW_MODE="json"
+        shift
+        ;;
       *)
         PARSED_ARGS+=("$1")
         shift
@@ -127,9 +321,6 @@ require_clean() {
   fi
 }
 
-# Fail unless release tag agrees with VERSION (plan: trust tag / VERSION check).
-# Stable: vX.Y.Z  ↔  VERSION=X.Y.Z
-# RC:     vX.Y.Z-rc.N  ↔  VERSION=X.Y.Z  (tag-only; VERSION unchanged)
 cmd_check_tag() {
   local tag="${1:-${GITHUB_REF_NAME:-}}"
   if [[ -z "$tag" ]]; then
@@ -169,6 +360,7 @@ cmd_tag() {
   sync_mirrors
   local ver tag
   ver="$(read_version)"
+  resolve_milestone "$ver"
   if [[ -n "$RC" ]]; then
     tag="v${ver}-rc.${RC}"
   else
@@ -178,8 +370,8 @@ cmd_tag() {
     echo "error: tag $tag already exists" >&2
     exit 1
   fi
-  git -C "$ROOT" tag -a "$tag" -m "Helmhost $tag"
-  echo "created annotated tag $tag"
+  git -C "$ROOT" tag -a "$tag" -m "Helmhost ${ERA} — ${CODENAME} ($tag)"
+  echo "created annotated tag $tag (${ERA} / ${CODENAME})"
   if [[ "$PUSH" -eq 1 ]]; then
     git -C "$ROOT" push origin "$tag"
   else
@@ -189,7 +381,7 @@ cmd_tag() {
 
 cmd_bump() {
   local part="$1"
-  local ver major minor patch
+  local ver major minor patch new_ver
   ver="$(read_version)"
   validate_semver "$ver"
   IFS=. read -r major minor patch <<<"$ver"
@@ -202,8 +394,26 @@ cmd_bump() {
       exit 1
       ;;
   esac
-  echo "${major}.${minor}.${patch}" >"$VERSION_FILE"
+  new_ver="${major}.${minor}.${patch}"
+  echo "$new_ver" >"$VERSION_FILE"
   sync_mirrors
+  case "$part" in
+    patch)
+      resolve_milestone "$new_ver"
+      echo "bump patch → $new_ver (codename stays ${CODENAME})"
+      ;;
+    minor)
+      if resolve_milestone "$new_ver" 2>/dev/null; then
+        echo "bump minor → $new_ver → ${CODENAME} / ${RELEASE_TAG}"
+        echo "  $DESCRIPTION"
+      else
+        echo "bump minor → $new_ver (add a [[milestone]] to codenames.toml)"
+      fi
+      ;;
+    major)
+      echo "bump major → $new_ver (new era — update codenames.toml era + milestones)"
+      ;;
+  esac
 }
 
 cmd_release() {
@@ -213,6 +423,8 @@ cmd_release() {
     local ver
     ver="$(read_version)"
     echo "current VERSION=$ver"
+    resolve_milestone "$ver"
+    echo "current: ${PRODUCT} ${ERA} — ${CODENAME} (v${ver})"
     exit 0
   fi
   cmd_bump "$part"

@@ -32,6 +32,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+      - name: Windows Inno Setup
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          choco install innosetup -y --no-progress
+          echo "/c/Program Files (x86)/Inno Setup 6" >> "$GITHUB_PATH"
+          echo "/c/Program Files/Inno Setup 6" >> "$GITHUB_PATH"
       - name: Detect channel
         id: meta
         shell: bash
@@ -60,6 +67,17 @@ jobs:
           chmod +x scripts/*.sh scripts/hh-version
           ./scripts/hh-version sync --build "${GITHUB_RUN_NUMBER}"
           ./scripts/build_release.sh
+      - name: Smoke — FFI in portable artifacts
+        shell: bash
+        env:
+          HELMHOST_CHANNEL: ${{ steps.meta.outputs.channel }}
+        run: |
+          chmod +x scripts/assert_ffi_in_artifact.sh
+          shopt -s nullglob
+          for f in dist/${HELMHOST_CHANNEL}/*.zip dist/${HELMHOST_CHANNEL}/*.tar.gz; do
+            ./scripts/assert_ffi_in_artifact.sh "$f"
+          done
+          ls -la dist/${HELMHOST_CHANNEL}/
       - uses: actions/upload-artifact@v4
         with:
           name: helmhost-${{ steps.meta.outputs.channel }}-${{ runner.os }}
@@ -73,12 +91,25 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Collect files
+      - name: Collect files + merged digests
         id: files
         shell: bash
         run: |
-          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print > /tmp/files.txt
-          echo "count=$(wc -l </tmp/files.txt)" >> "$GITHUB_OUTPUT"
+          mkdir -p release-assets
+          find artifacts -type f \( \
+            -name '*.zip' -o -name '*.tar.gz' -o \
+            -name '*.pkg' -o -name '*.deb' -o -name '*-setup.exe' -o \
+            -name 'SHA256SUMS' -o -name '*.sha256' \
+          \) -print | while read -r f; do
+            cp -f "$f" "release-assets/$(basename "$f")"
+          done
+          # One combined digest file for the whole release (recompute from copies)
+          chmod +x scripts/write_digests.sh
+          # Drop per-OS SHA256SUMS copies so we rewrite a single merged file
+          rm -f release-assets/SHA256SUMS
+          ./scripts/write_digests.sh release-assets
+          ls -la release-assets
+          echo "count=$(find release-assets -type f | wc -l)" >> "$GITHUB_OUTPUT"
       - name: Channel
         id: meta
         shell: bash
@@ -93,6 +124,6 @@ jobs:
         with:
           prerelease: ${{ steps.meta.outputs.prerelease }}
           generate_release_notes: true
-          files: artifacts/**/*
+          files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
