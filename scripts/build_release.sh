@@ -17,14 +17,31 @@ cargo build -p helmhost-ffi --release
 cd "$ROOT/apps/client"
 flutter pub get
 
+win_path() {
+  local p="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$p"
+  else
+    # Git Bash: /c/foo → C:\foo
+    if [[ "$p" =~ ^/([a-zA-Z])/(.*)$ ]]; then
+      echo "${BASH_REMATCH[1]^}:\\${BASH_REMATCH[2]//\//\\}"
+    else
+      echo "$p"
+    fi
+  fi
+}
+
 zip_dir() {
   local src="$1" dest="$2"
   rm -f "$dest"
   if command -v zip >/dev/null 2>&1; then
     (cd "$src" && zip -r "$dest" .)
   elif command -v powershell.exe >/dev/null 2>&1; then
+    local src_w dest_w
+    src_w="$(win_path "$src")"
+    dest_w="$(win_path "$dest")"
     powershell.exe -NoProfile -Command \
-      "Compress-Archive -Path (Join-Path '$src' '*') -DestinationPath '$dest' -Force"
+      "Compress-Archive -Path (Join-Path '$src_w' '*') -DestinationPath '$dest_w' -Force"
   else
     echo "error: need zip or powershell Compress-Archive" >&2
     exit 1
