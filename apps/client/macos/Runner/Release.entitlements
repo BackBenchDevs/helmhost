@@ -8,5 +8,9 @@
 	<true/>
 	<key>com.apple.security.cs.disable-library-validation</key>
 	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/.helmhost/</string>
+	</array>
 </dict>
 </plist>

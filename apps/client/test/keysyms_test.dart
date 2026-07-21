@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:helmhost_client/keysyms.dart';
+import 'package:helmhost/keysyms.dart';
 
 void main() {
   group('charToKeysym', () {

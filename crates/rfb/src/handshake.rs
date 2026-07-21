@@ -52,7 +52,11 @@ pub fn parse_security_types(buf: &[u8]) -> Result<Vec<u8>, String> {
     Ok(buf[1..1 + n].to_vec())
 }
 
-pub fn pick_security(types: &[u8], have_password: bool, allow_vencrypt: bool) -> Result<u8, String> {
+pub fn pick_security(
+    types: &[u8],
+    have_password: bool,
+    allow_vencrypt: bool,
+) -> Result<u8, String> {
     if allow_vencrypt && types.contains(&SEC_VENCRYPT) {
         return Ok(SEC_VENCRYPT);
     }

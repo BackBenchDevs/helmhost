@@ -1,6 +1,6 @@
 //! Async RFB session: handshake then reader + writer tasks on command/event queues.
 
-use crate::encoding::{rect_fits_framebuffer, encoding_name, RectAction};
+use crate::encoding::{encoding_name, rect_fits_framebuffer, RectAction};
 use crate::handshake::{
     finish_client_server_init, handshake_security_and_init, parse_security_result,
     vnc_auth_exchange, ServerInit, SEC_NONE, SEC_VENCRYPT, SEC_VNC_AUTH,
@@ -61,7 +61,16 @@ pub async fn connect_tcp(
     let stream = TcpStream::connect(&addr)
         .await
         .map_err(|e| format!("connect {addr}: {e}"))?;
-    match connect_stream(id, stream, host, creds.clone(), tls.clone(), prefer_vencrypt).await {
+    match connect_stream(
+        id,
+        stream,
+        host,
+        creds.clone(),
+        tls.clone(),
+        prefer_vencrypt,
+    )
+    .await
+    {
         Ok(handle) => Ok(handle),
         Err(e) if prefer_vencrypt && is_vencrypt_fallback_error(&e) => {
             let stream = TcpStream::connect(&addr)

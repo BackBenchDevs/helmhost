@@ -6,6 +6,7 @@ import 'session_helpers.dart';
 const _kThemeMode = 'helmhost.themeMode';
 const _kLibraryViewMode = 'helmhost.libraryViewMode';
 const _kViewScaleMode = 'helmhost.viewScaleMode';
+const _kSessionShell = 'helmhost.sessionShell';
 
 class AppPrefs {
   AppPrefs._(this._p);
@@ -55,6 +56,13 @@ class AppPrefs {
 
   Future<void> setViewScaleMode(ViewScaleMode mode) async {
     await _p.setString(_kViewScaleMode, mode.prefsKey);
+  }
+
+  SessionShell get sessionShell =>
+      SessionShellX.fromPrefs(_p.getString(_kSessionShell));
+
+  Future<void> setSessionShell(SessionShell shell) async {
+    await _p.setString(_kSessionShell, shell.prefsKey);
   }
 }
 

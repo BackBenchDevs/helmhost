@@ -2,22 +2,23 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:helmhost_client/library/auth_dialog.dart';
-import 'package:helmhost_client/main.dart';
-import 'package:helmhost_client/prefs.dart';
-import 'package:helmhost_client/session_helpers.dart';
-import 'package:helmhost_client/storage/credential_store.dart';
+import 'package:helmhost/library/auth_dialog.dart';
+import 'package:helmhost/main.dart';
+import 'package:helmhost/prefs.dart';
+import 'package:helmhost/session_helpers.dart';
+import 'package:helmhost/storage/credential_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets('Library shows title, regex search, empty grid', (tester) async {
+  testWidgets('Library shows address bar and empty state', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await AppPrefs.open();
     await tester.pumpWidget(HubApp(prefs: prefs));
     await tester.pump();
-    expect(find.text('Library'), findsOneWidget);
-    expect(find.textContaining('No saved connections yet'), findsOneWidget);
-    expect(find.byIcon(Icons.add), findsOneWidget);
+    expect(find.text('HelmHost'), findsOneWidget);
+    expect(find.text('Connect'), findsOneWidget);
+    expect(find.textContaining('No connections yet'), findsOneWidget);
+    expect(find.byType(FloatingActionButton), findsOneWidget);
   });
 
   testWidgets('Hub pumps with dark theme', (tester) async {
@@ -57,7 +58,38 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     expect(find.text('Username'), findsOneWidget);
-    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Authentication'), findsOneWidget);
+    expect(find.text('Remember on this device'), findsOneWidget);
+  });
+
+  testWidgets('AuthDialog savePermanently checkbox', (tester) async {
+    AuthDialogResult? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await showAuthDialog(
+                  context,
+                  need: AuthNeed.password,
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'secret');
+    await tester.tap(find.text('Remember on this device'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(result?.password, 'secret');
+    expect(result?.savePermanently, isTrue);
   });
 
   test('MemoryCredentialStore round-trip', () async {

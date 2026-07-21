@@ -6,18 +6,23 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../bridge.dart';
 import '../logging/logger.dart';
+import '../prefs.dart';
+import '../session/credentials.dart';
 import '../session/session_ipc.dart';
 import '../session_helpers.dart';
+import '../storage/app_paths.dart';
 import '../storage/credential_store.dart';
 import '../thumbs.dart';
 import 'auth_dialog.dart';
 import 'connection_editor.dart';
 import 'library_card_widgets.dart';
+import 'profile_editor.dart';
+import 'tab_session_workspace.dart';
+import 'vnc_address.dart';
 
 extension WindowControllerExt on WindowController {
   Future<void> closeWindow() => invokeMethod(kMethodWindowClose);
@@ -30,6 +35,9 @@ class HubPage extends StatefulWidget {
     required this.onThemeModeChanged,
     required this.viewMode,
     required this.onViewModeChanged,
+    required this.sessionShell,
+    required this.onSessionShellChanged,
+    this.prefs,
     ILogger? logger,
   }) : logger = logger ?? defaultLogger(module: 'hub');
 
@@ -37,6 +45,9 @@ class HubPage extends StatefulWidget {
   final ValueChanged<ThemeMode> onThemeModeChanged;
   final LibraryViewMode viewMode;
   final ValueChanged<LibraryViewMode> onViewModeChanged;
+  final SessionShell sessionShell;
+  final ValueChanged<SessionShell> onSessionShellChanged;
+  final AppPrefs? prefs;
   final ILogger logger;
 
   @override
@@ -49,13 +60,17 @@ class _HubPageState extends State<HubPage> with WindowListener {
   String? _error;
   String _hello = '';
   List<LibraryCard> _cards = [];
+  List<ConnectionProfileCard> _profiles = [];
   final _search = TextEditingController();
-  final _sessions = <OpenSessionRef>[];
+  final _sessions = OpenSessionRegistry();
   bool _connecting = false;
   String? _thumbsRoot;
   final _liveThumbs = <String, Uint8List>{};
   Timer? _liveTimer;
   String? _searchPatternError;
+  String? _profileFilterId; // null = all
+  int? _activeTabSessionId;
+  var _libraryTabSelected = true;
 
   @override
   void initState() {
@@ -94,7 +109,13 @@ class _HubPageState extends State<HubPage> with WindowListener {
     final args = _asArgMap(raw);
     final id = (args['sessionId'] as num?)?.toInt();
     if (id == null) return;
-    if (!removeOpenBySessionId(_sessions, id)) return;
+    if (!_sessions.removeBySessionId(id)) return;
+    if (_activeTabSessionId == id) {
+      _activeTabSessionId = _sessions.tabSessions.isEmpty
+          ? null
+          : _sessions.tabSessions.last.id;
+      _libraryTabSelected = _activeTabSessionId == null;
+    }
     if (!mounted) return;
     setState(_reloadCards);
   }
@@ -106,16 +127,21 @@ class _HubPageState extends State<HubPage> with WindowListener {
     if (oldId == null || newId == null) return;
     final host = args['host'] as String?;
     final port = (args['port'] as num?)?.toInt();
-    final ok = replaceOpenSessionId(
-      _sessions,
+    final ok = _sessions.replaceSessionId(
       oldId: oldId,
       newId: newId,
       host: host,
       port: port,
     );
     if (!ok && host != null && port != null) {
-      _sessions.add(OpenSessionRef(id: newId, host: host, port: port));
+      _sessions.add(OpenSessionRef(
+        id: newId,
+        host: host,
+        port: port,
+        shell: widget.sessionShell,
+      ));
     }
+    if (_activeTabSessionId == oldId) _activeTabSessionId = newId;
     if (!mounted) return;
     setState(_reloadCards);
   }
@@ -128,6 +154,12 @@ class _HubPageState extends State<HubPage> with WindowListener {
   void _onSearchChanged() {
     final q = _search.text.trim();
     if (q.isEmpty) {
+      setState(() => _searchPatternError = null);
+      return;
+    }
+    // Address-like input is fine for filter + Connect; only flag bad regex
+    // when it isn't a plausible VNC address.
+    if (tryParseVncAddress(q) != null) {
       setState(() => _searchPatternError = null);
       return;
     }
@@ -147,7 +179,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
 
   @override
   void onWindowClose() async {
-    for (final s in List<OpenSessionRef>.from(_sessions)) {
+    for (final s in List<OpenSessionRef>.from(_sessions.items)) {
       try {
         _bridge?.close(s.id);
       } catch (_) {}
@@ -169,11 +201,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
     try {
       final b = HelmBridge.open();
       await b.initRegistry();
-      final support = await getApplicationSupportDirectory();
+      final root = await AppPaths.root();
       setState(() {
         _bridge = b;
         _hello = b.hello();
-        _thumbsRoot = support.path;
+        _thumbsRoot = root.path;
         _error = null;
         _reloadCards();
       });
@@ -186,20 +218,30 @@ class _HubPageState extends State<HubPage> with WindowListener {
     final b = _bridge;
     if (b == null) return;
     final openByKey = {
-      for (final s in _sessions) sessionKey(s.host, s.port): s.id,
+      for (final s in _sessions.items) sessionKey(s.host, s.port): s.id,
     };
     _cards = b.registryList().map((raw) {
       final m = Map<String, dynamic>.from(raw as Map);
       final id = m['id'] as String? ?? '';
       return LibraryCard.fromJson(m, openSessionId: openByKey[id]);
     }).toList();
+    try {
+      _profiles = b.profileList().map((raw) {
+        return ConnectionProfileCard.fromJson(
+          Map<String, dynamic>.from(raw as Map),
+        );
+      }).toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+    } catch (_) {
+      _profiles = [];
+    }
   }
 
   void _refreshLiveThumbs() {
     final b = _bridge;
     if (b == null || _sessions.isEmpty) return;
     var changed = false;
-    for (final s in _sessions) {
+    for (final s in _sessions.items) {
       try {
         final (w, h) = b.fbSize(s.id);
         if (w <= 0 || h <= 0) continue;
@@ -219,6 +261,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
     required String host,
     required int port,
     String? username,
+    String? profileId,
     bool preferVencrypt = false,
     bool acceptInvalidCerts = false,
   }) async {
@@ -230,6 +273,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       'host': host,
       'port': port,
       if (username != null) 'username': username,
+      if (profileId != null) 'profile_id': profileId,
       'prefer_vencrypt': preferVencrypt,
       'accept_invalid_certs': acceptInvalidCerts,
     });
@@ -255,33 +299,23 @@ class _HubPageState extends State<HubPage> with WindowListener {
     Map<String, dynamic> entry, {
     String? password,
     required bool savePassword,
+    bool clearPassword = false,
   }) async {
     final id = entry['id'] as String;
     try {
-      if (savePassword && password != null && password.isNotEmpty) {
-        await _credentials.writePassword(id, password);
-      } else if (!savePassword) {
-        await _credentials.deletePassword(id);
-      }
+      await persistEntryCredentials(
+        _credentials,
+        id,
+        password: password,
+        savePassword: savePassword,
+        clearPassword: clearPassword,
+      );
     } on CredentialStoreException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.message)),
         );
       }
-    }
-  }
-
-  Future<String?> _readPasswordSafe(String entryId) async {
-    try {
-      return await _credentials.readPassword(entryId);
-    } on CredentialStoreException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message)),
-        );
-      }
-      return null;
     }
   }
 
@@ -306,16 +340,41 @@ class _HubPageState extends State<HubPage> with WindowListener {
   }
 
   Future<void> _connectCard(LibraryCard card) async {
-    final pwd = await _readPasswordSafe(card.id);
+    Map<String, dynamic>? resolved;
+    try {
+      resolved = _bridge?.registryResolve(card.id);
+    } catch (_) {}
+    final profileId =
+        (resolved?['profile_id'] as String?) ?? card.profileId;
+    final connectHost =
+        (resolved?['connect_host'] as String?)?.trim().isNotEmpty == true
+            ? resolved!['connect_host'] as String
+            : card.host;
+    final pwd = await resolvePassword(
+      store: _credentials,
+      entryId: card.id,
+      profileId: profileId,
+    );
+    final port = connectPortForCard(card: card, resolved: resolved);
     await _connectTo(
-      card.host,
-      card.port,
-      entry: card.toJson(),
-      username: card.username,
+      connectHost,
+      port,
+      entry: {
+        ...card.toJson(),
+        'host': card.host,
+        'id': sessionKey(connectHost, port),
+        if (card.displayNumber == null &&
+            (resolved?['display_number'] as num?) != null)
+          'display_number': (resolved!['display_number'] as num).toInt(),
+      },
+      username: (resolved?['username'] as String?) ?? card.username,
       password: pwd,
-      preferVencrypt: card.preferVencrypt,
-      acceptInvalidCerts: card.acceptInvalidCerts,
+      preferVencrypt:
+          (resolved?['prefer_vencrypt'] as bool?) ?? card.preferVencrypt,
+      acceptInvalidCerts: (resolved?['accept_invalid_certs'] as bool?) ??
+          card.acceptInvalidCerts,
       displayName: card.displayName,
+      profileId: profileId,
     );
   }
 
@@ -338,23 +397,36 @@ class _HubPageState extends State<HubPage> with WindowListener {
     bool preferVencrypt = false,
     bool acceptInvalidCerts = false,
     bool savePassword = false,
+    String? profileId,
+    bool savePasswordToProfile = false,
   }) async {
     final b = _bridge;
     if (b == null || _connecting) return;
 
-    final existing = findOpenByHostPort(_sessions, host, port);
+    final existing = _sessions.findByHostPort(host, port);
+    final shell = SessionShellRouter(preferred: widget.sessionShell)
+        .routeForNew(existing: existing);
     if (existing != null) {
       if (_isNativeSessionAlive(b, existing.id)) {
         b.grab(existing.id);
-        await _openSessionWindow(
-          existing.id,
-          sessionKey(host, port),
-          host: host,
-          port: port,
-          username: username,
-          preferVencrypt: preferVencrypt,
-          acceptInvalidCerts: acceptInvalidCerts,
-        );
+        if (existing.shell == SessionShell.tabs || shell == SessionShell.tabs) {
+          setState(() {
+            _activeTabSessionId = existing.id;
+            _libraryTabSelected = false;
+            _sessions.applyTabGrabPolicy(activeId: existing.id);
+          });
+        } else {
+          await _openSessionWindow(
+            existing.id,
+            sessionKey(host, port),
+            host: host,
+            port: port,
+            username: username,
+            profileId: profileId,
+            preferVencrypt: preferVencrypt,
+            acceptInvalidCerts: acceptInvalidCerts,
+          );
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Session already open')),
@@ -362,8 +434,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         }
         return;
       }
-      // Stale open ref — purge and connect fresh.
-      removeOpenBySessionId(_sessions, existing.id);
+      _sessions.removeBySessionId(existing.id);
       try {
         b.close(existing.id);
       } catch (_) {}
@@ -383,6 +454,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
         preferVencrypt: preferVencrypt,
         acceptInvalidCerts: acceptInvalidCerts,
         savePassword: savePassword,
+        shell: shell,
+        profileId: profileId,
+        savePasswordToProfile: savePasswordToProfile,
       );
     } finally {
       if (mounted) setState(() => _connecting = false);
@@ -401,6 +475,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
     bool acceptInvalidCerts = false,
     bool savePassword = false,
     bool persistUsername = false,
+    SessionShell shell = SessionShell.windows,
+    String? profileId,
+    bool savePasswordToProfile = false,
   }) async {
     try {
       final id = b.connect(
@@ -416,6 +493,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         'port': port,
         'sessionId': id,
         'vencrypt': preferVencrypt,
+        'shell': shell.prefsKey,
       });
       b.grab(id);
       final key = sessionKey(host, port);
@@ -438,24 +516,60 @@ class _HubPageState extends State<HubPage> with WindowListener {
         upsert['username'] = username;
       }
       b.registryUpsertJson(upsert);
-      await _persistEntryCredentials(
-        upsert,
-        password: password,
-        savePassword: savePassword,
-      );
+      if (savePassword &&
+          password != null &&
+          password.isNotEmpty &&
+          profileId != null &&
+          savePasswordToProfile) {
+        // Auth "remember" under a group → shared profile vault.
+        try {
+          await persistProfileCredentials(
+            _credentials,
+            profileId,
+            password: password,
+            savePassword: true,
+          );
+        } on CredentialStoreException catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(e.message)),
+            );
+          }
+        }
+      } else {
+        await _persistEntryCredentials(
+          upsert,
+          password: password,
+          savePassword: savePassword,
+        );
+      }
       setState(() {
-        _sessions.add(OpenSessionRef(id: id, host: host, port: port));
+        _sessions.add(OpenSessionRef(
+          id: id,
+          host: host,
+          port: port,
+          shell: shell,
+          profileId: profileId,
+        ));
+        if (shell == SessionShell.tabs) {
+          _activeTabSessionId = id;
+          _libraryTabSelected = false;
+          _sessions.applyTabGrabPolicy(activeId: id);
+        }
         _reloadCards();
       });
-      await _openSessionWindow(
-        id,
-        key,
-        host: host,
-        port: port,
-        username: username,
-        preferVencrypt: preferVencrypt,
-        acceptInvalidCerts: acceptInvalidCerts,
-      );
+      if (shell == SessionShell.windows) {
+        await _openSessionWindow(
+          id,
+          key,
+          host: host,
+          port: port,
+          username: username,
+          profileId: profileId,
+          preferVencrypt: preferVencrypt,
+          acceptInvalidCerts: acceptInvalidCerts,
+        );
+      }
     } on StateError catch (e) {
       final need = parseAuthNeed(e.message);
       if (need != AuthNeed.none && mounted) {
@@ -463,6 +577,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
           context,
           need: need,
           initialUsername: username,
+          connectingTo: sessionKey(host, port),
         );
         if (creds == null) return;
         await _connectWithAuth(
@@ -475,8 +590,12 @@ class _HubPageState extends State<HubPage> with WindowListener {
           displayName: displayName,
           preferVencrypt: preferVencrypt,
           acceptInvalidCerts: acceptInvalidCerts,
-          savePassword: savePassword || creds.password != null,
+          savePassword: savePassword || creds.savePermanently,
           persistUsername: need == AuthNeed.usernamePassword,
+          shell: shell,
+          profileId: profileId,
+          savePasswordToProfile: savePasswordToProfile ||
+              (creds.savePermanently && profileId != null),
         );
         return;
       }
@@ -520,39 +639,129 @@ class _HubPageState extends State<HubPage> with WindowListener {
       merged,
       password: result.password,
       savePassword: result.savePassword,
+      clearPassword: !result.savePassword,
     );
     setState(_reloadCards);
     if (result.connect) {
+      final resolvedHost = () {
+        try {
+          final r = b.registryResolve(merged['id'] as String);
+          return (r['connect_host'] as String?) ?? merged['host'] as String;
+        } catch (_) {
+          final pid = merged['profile_id'] as String?;
+          if (pid != null) {
+            for (final p in _profiles) {
+              if (p.id == pid) {
+                return qualifyHost(merged['host'] as String, p.domain);
+              }
+            }
+          }
+          return merged['host'] as String;
+        }
+      }();
       await _connectTo(
-        merged['host'] as String,
+        resolvedHost,
         merged['port'] as int,
         entry: merged,
         displayName: merged['display_name'] as String?,
         username: merged['username'] as String?,
         password: result.password ??
-            await _readPasswordSafe(merged['id'] as String),
+            await resolvePassword(
+              store: _credentials,
+              entryId: merged['id'] as String,
+              profileId: merged['profile_id'] as String?,
+            ),
         preferVencrypt: merged['prefer_vencrypt'] as bool? ?? false,
         acceptInvalidCerts: merged['accept_invalid_certs'] as bool? ?? false,
         savePassword: result.savePassword,
+        profileId: merged['profile_id'] as String?,
       );
     }
   }
 
   Future<void> _showNewEditor() async {
-    final result = await showConnectionEditor(
+    final result = await showNewConnectionDialog(
       context,
       credentials: _credentials,
+      profiles: _profileChoices(),
     );
     if (result != null) await _handleEditorResult(result);
   }
 
   Future<void> _editCard(LibraryCard card) async {
-    final result = await showConnectionEditor(
+    final result = await showPropertiesDialog(
       context,
       existing: card,
       credentials: _credentials,
+      profiles: _profileChoices(),
     );
     if (result != null) await _handleEditorResult(result);
+  }
+
+  List<ProfileChoice> _profileChoices() => [
+        for (final p in _profiles)
+          ProfileChoice.named(p.id, p.name, domain: p.domain),
+      ];
+
+  Future<void> _addressBarConnect() async {
+    final raw = _search.text.trim();
+    if (raw.isEmpty) {
+      setState(() => _searchPatternError = 'Enter a host or VNC address');
+      return;
+    }
+
+    final result = resolveQuickConnect(
+      rawInput: raw,
+      profiles: _profiles,
+      filterProfileId: _profileFilterId,
+    );
+    if (result.error != null) {
+      setState(() => _searchPatternError = result.error);
+      return;
+    }
+    final target = result.target!;
+    setState(() => _searchPatternError = null);
+
+    final connectHost = target.connectHost;
+    final port = target.port;
+    final key = sessionKey(connectHost, port);
+    var profileId = target.profileId;
+    final short = target.entryHost;
+
+    Map<String, dynamic>? entry;
+    for (final c in _cards) {
+      if (c.id == key ||
+          (c.host == short && c.port == port) ||
+          (c.host == connectHost && c.port == port)) {
+        entry = c.toJson();
+        profileId ??= c.profileId;
+        break;
+      }
+    }
+    entry ??= {
+      'id': key,
+      'host': short,
+      'port': port,
+      if (target.displayNumber != null) 'display_number': target.displayNumber,
+      if (profileId != null) 'profile_id': profileId,
+    };
+
+    final pwd = await resolvePassword(
+      store: _credentials,
+      entryId: entry['id'] as String? ?? key,
+      profileId: profileId,
+    );
+    await _connectTo(
+      connectHost,
+      port,
+      entry: entry,
+      username: entry['username'] as String?,
+      password: pwd,
+      preferVencrypt: entry['prefer_vencrypt'] as bool? ?? false,
+      acceptInvalidCerts: entry['accept_invalid_certs'] as bool? ?? false,
+      displayName: entry['display_name'] as String?,
+      profileId: profileId,
+    );
   }
 
   Future<void> _cardAction(String action, LibraryCard card) async {
@@ -576,18 +785,34 @@ class _HubPageState extends State<HubPage> with WindowListener {
         }
         setState(_reloadCards);
       case 'disconnect':
-        OpenSessionRef? open;
-        for (final s in _sessions) {
-          if (s.id == card.openSessionId) {
-            open = s;
-            break;
-          }
-        }
+        final open = _sessions.findBySessionId(card.openSessionId ?? -1) ??
+            _sessions.findByHostPort(card.host, card.port);
         if (open != null) await _disconnect(open);
     }
   }
 
   Future<void> _disconnect(OpenSessionRef s) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Disconnect session?'),
+        content: Text(
+          'Disconnect from ${s.host}:${s.port}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Disconnect'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
     final key = sessionKey(s.host, s.port);
     try {
       await saveSessionThumb(_bridge!, key, s.id);
@@ -595,21 +820,202 @@ class _HubPageState extends State<HubPage> with WindowListener {
     try {
       _bridge?.close(s.id);
     } catch (_) {}
-    for (final c in await WindowController.getAll()) {
-      if (c.arguments.isEmpty) continue;
-      try {
-        final a = jsonDecode(c.arguments) as Map<String, dynamic>;
-        if (a['role'] == 'session' &&
-            (a['sessionId'] as num).toInt() == s.id) {
-          await c.closeWindow();
-        }
-      } catch (_) {}
+    if (s.shell == SessionShell.windows) {
+      for (final c in await WindowController.getAll()) {
+        if (c.arguments.isEmpty) continue;
+        try {
+          final a = jsonDecode(c.arguments) as Map<String, dynamic>;
+          if (a['role'] == 'session' &&
+              (a['sessionId'] as num).toInt() == s.id) {
+            await c.closeWindow();
+          }
+        } catch (_) {}
+      }
     }
     setState(() {
-      _sessions.removeWhere((x) => x.id == s.id);
+      _sessions.removeBySessionId(s.id);
+      if (_activeTabSessionId == s.id) {
+        _activeTabSessionId = _sessions.tabSessions.isEmpty
+            ? null
+            : _sessions.tabSessions.last.id;
+        _libraryTabSelected = _activeTabSessionId == null;
+      }
       _liveThumbs.remove(key);
       _reloadCards();
     });
+  }
+
+  Future<void> _editProfile([ConnectionProfileCard? existing]) async {
+    final result = await showProfileEditor(
+      context,
+      existing: existing,
+      credentials: _credentials,
+    );
+    if (result == null) return;
+    final json = result.profile.toJson();
+    widget.logger.info('profile upsert', {
+      'id': result.profile.id,
+      'default_display': result.profile.defaultDisplay,
+      'json': json,
+    });
+    try {
+      _bridge?.profileUpsertJson(json);
+    } catch (e) {
+      widget.logger.error('profile upsert failed', {'error': '$e', 'json': json});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save profile: $e')),
+        );
+      }
+      return;
+    }
+    try {
+      await persistProfileCredentials(
+        _credentials,
+        result.profile.id,
+        password: result.password,
+        savePassword: result.savePassword,
+        clearPassword: result.clearPassword,
+      );
+    } on CredentialStoreException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    }
+    // Confirm what actually landed after reload from FFI.
+    setState(_reloadCards);
+    ConnectionProfileCard? saved;
+    for (final p in _profiles) {
+      if (p.id == result.profile.id) {
+        saved = p;
+        break;
+      }
+    }
+    widget.logger.info('profile after reload', {
+      'id': result.profile.id,
+      'default_display_sent': result.profile.defaultDisplay,
+      'default_display_reloaded': saved?.defaultDisplay,
+    });
+    if (mounted) {
+      final d = saved?.defaultDisplay;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            d == null
+                ? 'Saved “${result.profile.name}” (default display: none)'
+                : 'Saved “${result.profile.name}” (default display: :$d)',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteProfile(ConnectionProfileCard p) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete profile?'),
+        content: Text('Delete “${p.name}”? Hosts keep their own settings.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    _bridge?.profileRemove(p.id);
+    if (_profileFilterId == p.id) _profileFilterId = null;
+    setState(_reloadCards);
+  }
+
+  Future<void> _toggleSessionShell() async {
+    final next = widget.sessionShell == SessionShell.windows
+        ? SessionShell.tabs
+        : SessionShell.windows;
+    if (_sessions.isEmpty) {
+      widget.onSessionShellChanged(next);
+      return;
+    }
+    final migrate = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          next == SessionShell.tabs
+              ? 'Switch to tabbed sessions?'
+              : 'Switch to windowed sessions?',
+        ),
+        content: const Text(
+          'Move open sessions into the new shell now? '
+          '(May reconnect if the session cannot be reparented.)',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('New connects only'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Move all'),
+          ),
+        ],
+      ),
+    );
+    widget.onSessionShellChanged(next);
+    if (migrate == true) {
+      SessionShellRouter.migrateAll(_sessions, next);
+      setState(() {
+        if (next == SessionShell.tabs) {
+          _libraryTabSelected = false;
+          _activeTabSessionId = _sessions.tabSessions.isEmpty
+              ? null
+              : _sessions.tabSessions.first.id;
+        } else {
+          _libraryTabSelected = true;
+          _activeTabSessionId = null;
+        }
+      });
+      // Detach path: open windows for sessions now in windows shell.
+      if (next == SessionShell.windows) {
+        for (final s in _sessions.windowSessions) {
+          await _openSessionWindow(
+            s.id,
+            s.key,
+            host: s.host,
+            port: s.port,
+            profileId: s.profileId,
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _detachTab(int sessionId) async {
+    final s = _sessions.findBySessionId(sessionId);
+    if (s == null) return;
+    _sessions.detachToWindow(sessionId);
+    setState(() {
+      if (_activeTabSessionId == sessionId) {
+        _activeTabSessionId = _sessions.tabSessions.isEmpty
+            ? null
+            : _sessions.tabSessions.last.id;
+        _libraryTabSelected = _activeTabSessionId == null;
+      }
+    });
+    await _openSessionWindow(
+      s.id,
+      s.key,
+      host: s.host,
+      port: s.port,
+      profileId: s.profileId,
+    );
   }
 
   Future<void> _exportLibrary() async {
@@ -697,7 +1103,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
             const SizedBox(height: 16),
             Text(
               _cards.isEmpty
-                  ? 'No saved connections yet.\nTap + to connect.'
+                  ? 'No connections yet.\nType a host above and press Connect, or click +'
                   : 'No matches',
               textAlign: TextAlign.center,
             ),
@@ -745,13 +1151,156 @@ class _HubPageState extends State<HubPage> with WindowListener {
     );
   }
 
+  List<LibraryCard> _filteredCards() {
+    var list = filterLibraryCardsRegex(_cards, _search.text);
+    final pid = _profileFilterId;
+    if (pid != null) {
+      ConnectionProfileCard? profile;
+      for (final p in _profiles) {
+        if (p.id == pid) {
+          profile = p;
+          break;
+        }
+      }
+      if (profile != null) {
+        list = list.where((c) => cardMatchesProfile(c, profile!)).toList();
+      }
+    }
+    return list;
+  }
+
+  Widget _buildLibraryPane() {
+    final filtered = _filteredCards();
+    return Row(
+      children: [
+        SizedBox(
+          width: 180,
+          child: Material(
+            color: Theme.of(context).colorScheme.surfaceContainerLow,
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              children: [
+                ListTile(
+                  dense: true,
+                  selected: _profileFilterId == null,
+                  title: const Text('All'),
+                  onTap: () => setState(() => _profileFilterId = null),
+                ),
+                for (final p in _profiles)
+                  ListTile(
+                    dense: true,
+                    selected: _profileFilterId == p.id,
+                    title: Text(p.name, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(
+                      normalizeDomain(p.domain).isEmpty
+                          ? 'No domain — edit to set'
+                          : p.domainLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: normalizeDomain(p.domain).isEmpty
+                          ? TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                              fontSize: 12,
+                            )
+                          : null,
+                    ),
+                    onTap: () => setState(() => _profileFilterId = p.id),
+                    onLongPress: () => _editProfile(p),
+                    trailing: PopupMenuButton<String>(
+                      onSelected: (a) async {
+                        if (a == 'edit') await _editProfile(p);
+                        if (a == 'delete') await _deleteProfile(p);
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'edit', child: Text('Edit…')),
+                        PopupMenuItem(value: 'delete', child: Text('Delete…')),
+                      ],
+                    ),
+                  ),
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.add, size: 18),
+                  title: const Text('New profile…'),
+                  onTap: () => _editProfile(),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(child: _buildBody(filtered)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final filtered = filterLibraryCardsRegex(_cards, _search.text);
+    final useTabs = widget.sessionShell == SessionShell.tabs;
+    final libraryPane = Column(
+      children: [
+        if (_error != null)
+          ColoredBox(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: ListTile(
+              dense: true,
+              title: Text(_error!, maxLines: 2),
+              trailing:
+                  TextButton(onPressed: _boot, child: const Text('Retry')),
+            ),
+          ),
+        Expanded(child: _buildLibraryPane()),
+        Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(
+            _error != null ? 'Bridge error' : 'Helmhost · $_hello',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      ],
+    );
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Library'),
+        titleSpacing: 8,
+        title: Row(
+          children: [
+            const Text('HelmHost'),
+            const SizedBox(width: 16),
+            Expanded(
+              child: TextField(
+                controller: _search,
+                enabled: !_connecting,
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: 'VNC address or search…',
+                  errorText: _searchPatternError,
+                  prefixIcon: const Icon(Icons.lan_outlined, size: 20),
+                  border: const OutlineInputBorder(),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+                onSubmitted: (_) => _addressBarConnect(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: _connecting ? null : _addressBarConnect,
+              child: const Text('Connect'),
+            ),
+          ],
+        ),
         actions: [
+          IconButton(
+            tooltip: widget.sessionShell == SessionShell.tabs
+                ? 'Session shell: Tabs (click for Windows)'
+                : 'Session shell: Windows (click for Tabs)',
+            onPressed: _toggleSessionShell,
+            icon: Icon(
+              widget.sessionShell == SessionShell.tabs
+                  ? Icons.tab
+                  : Icons.open_in_new,
+            ),
+          ),
           IconButton(
             tooltip: widget.viewMode == LibraryViewMode.grid
                 ? 'List view'
@@ -786,42 +1335,35 @@ class _HubPageState extends State<HubPage> with WindowListener {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _connecting ? null : _showNewEditor,
+        tooltip: 'New connection',
         child: const Icon(Icons.add),
       ),
-      body: Column(
-        children: [
-          if (_error != null)
-            ColoredBox(
-              color: Theme.of(context).colorScheme.errorContainer,
-              child: ListTile(
-                dense: true,
-                title: Text(_error!, maxLines: 2),
-                trailing:
-                    TextButton(onPressed: _boot, child: const Text('Retry')),
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: TextField(
-              controller: _search,
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search),
-                hintText: 'Regex search (host, name, tags…)',
-                errorText: _searchPatternError,
-                isDense: true,
-              ),
-            ),
-          ),
-          Expanded(child: _buildBody(filtered)),
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: Text(
-              _error != null ? 'Bridge error' : 'Helmhost · $_hello',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ],
-      ),
+      body: useTabs
+          ? TabSessionWorkspace(
+              sessions: _sessions.tabSessions,
+              activeSessionId: _activeTabSessionId,
+              librarySelected: _libraryTabSelected,
+              libraryChild: libraryPane,
+              prefs: widget.prefs,
+              onLibrarySelected: () => setState(() {
+                _libraryTabSelected = true;
+                _sessions.applyTabGrabPolicy(activeId: null, wantGrab: false);
+              }),
+              onSelect: (id) => setState(() {
+                _libraryTabSelected = false;
+                _activeTabSessionId = id;
+                _sessions.applyTabGrabPolicy(activeId: id);
+                try {
+                  _bridge?.grab(id);
+                } catch (_) {}
+              }),
+              onClose: (id) {
+                final s = _sessions.findBySessionId(id);
+                if (s != null) unawaited(_disconnect(s));
+              },
+              onDetach: (id) => unawaited(_detachTab(id)),
+            )
+          : libraryPane,
     );
   }
 }

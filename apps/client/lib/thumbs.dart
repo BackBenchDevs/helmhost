@@ -2,9 +2,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
-import 'package:path_provider/path_provider.dart';
 
 import 'bridge.dart';
+import 'storage/app_paths.dart';
 
 Uint8List? encodeFbJpegThumb(Uint8List rgba, int w, int h, {int width = 320}) {
   if (w <= 0 || h <= 0 || rgba.length < w * h * 4) return null;
@@ -30,12 +30,10 @@ Future<void> saveSessionThumb(
     final rgba = bridge.fbCopy(sessionId, w, h);
     final jpg = encodeFbJpegThumb(rgba, w, h);
     if (jpg == null) return;
-    final support = await getApplicationSupportDirectory();
-    final thumbs = Directory('${support.path}/thumbs');
-    if (!await thumbs.exists()) await thumbs.create(recursive: true);
+    final thumbs = await AppPaths.thumbsDir();
     final safe = entryId.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final rel = 'thumbs/$safe.jpg';
-    await File('${support.path}/$rel').writeAsBytes(jpg);
+    final rel = '${AppPaths.thumbsDirName}/$safe.jpg';
+    await File('${thumbs.path}/$safe.jpg').writeAsBytes(jpg);
     final list = bridge.registryList();
     Map<String, dynamic> entry = {
       'id': entryId,
@@ -44,7 +42,7 @@ Future<void> saveSessionThumb(
       'thumb_path': rel,
     };
     for (final raw in list) {
-      final m = raw as Map<String, dynamic>;
+      final m = Map<String, dynamic>.from(raw as Map);
       if (m['id'] == entryId) {
         entry = {...m, 'thumb_path': rel};
         break;

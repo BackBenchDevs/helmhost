@@ -4,8 +4,8 @@
 #![allow(clippy::missing_safety_doc)]
 
 use helmhost_core::{
-    ConnectTarget, ConnectionEntry, ConnectionRegistry, Creds, InputFocus, KeyEvent, PointerEvent,
-    SessionCommand, SessionEvent, SessionHandle, SessionId, SessionManager,
+    ConnectionEntry, ConnectionProfile, ConnectionRegistry, Creds, InputFocus, KeyEvent,
+    PointerEvent, SessionCommand, SessionEvent, SessionHandle, SessionId, SessionManager,
 };
 use helmhost_rfb::RfbSessionFactory;
 use helmhost_rfb::TlsOptions;
@@ -76,12 +76,7 @@ pub fn hello() -> String {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum FfiEvent {
     DesktopResize { w: u32, h: u32 },
-    FramebufferDirty {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    },
+    FramebufferDirty { x: i32, y: i32, w: u32, h: u32 },
     Bell,
     Clipboard { text: String },
     Disconnected,
@@ -104,7 +99,8 @@ fn encode_event(ev: Option<SessionEvent>) -> String {
         Some(SessionEvent::Disconnected) => FfiEvent::Disconnected,
         Some(SessionEvent::Error(message)) => FfiEvent::Error { message },
     };
-    serde_json::to_string(&mapped).unwrap_or_else(|_| r#"{"type":"error","message":"serialize"}"#.into())
+    serde_json::to_string(&mapped)
+        .unwrap_or_else(|_| r#"{"type":"error","message":"serialize"}"#.into())
 }
 
 fn cstr_to_string(p: *const c_char) -> Result<String, String> {
@@ -128,14 +124,15 @@ fn err_cstr(e: impl Into<String>) -> *mut c_char {
 }
 
 /// Free a string returned by this library.
+///
+/// Safety: `s` must be null or a pointer previously returned by this crate
+/// (ownership transfer via [`CString::into_raw`]).
 #[no_mangle]
-pub extern "C" fn hh_string_free(s: *mut c_char) {
+pub unsafe extern "C" fn hh_string_free(s: *mut c_char) {
     if s.is_null() {
         return;
     }
-    unsafe {
-        drop(CString::from_raw(s));
-    }
+    drop(CString::from_raw(s));
 }
 
 #[no_mangle]
@@ -189,32 +186,28 @@ pub extern "C" fn hh_connect(
     );
 
     let result = RT.block_on(async {
+        let id = {
+            let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
+            state.factory.configure_connect(tls.clone(), prefer);
+            state.manager.alloc_id()
+        };
+        let handle = helmhost_rfb::session::connect_tcp(
+            id,
+            &host,
+            port,
+            Creds { username, password },
+            tls,
+            prefer,
+        )
+        .await?;
+        let session_id = handle.id.0;
         let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
-        state
-            .factory
-            .configure_connect(tls, prefer);
-        use helmhost_core::SessionFactory;
-        let handle = state
-            .factory
-            .connect(
-                ConnectTarget {
-                    host: host.clone(),
-                    port,
-                },
-                Creds {
-                    username,
-                    password,
-                },
-            )
-            .await?;
-        let id = handle.id.0;
         state.manager.insert(handle.id, handle.commands.clone());
-        state.sessions.insert(id, handle);
+        state.sessions.insert(session_id, handle);
         let entry_id = format!("{host}:{port}");
         let prev = state.registry.get(&entry_id).cloned();
-        let mut entry = prev.unwrap_or_else(|| {
-            ConnectionEntry::new(entry_id.clone(), host.clone(), port)
-        });
+        let mut entry =
+            prev.unwrap_or_else(|| ConnectionEntry::new(entry_id.clone(), host.clone(), port));
         entry.host = host.clone();
         entry.port = port;
         entry.last_connected_at = Some(
@@ -228,7 +221,7 @@ pub extern "C" fn hh_connect(
         if let Some(path) = state.registry_path.clone() {
             let _ = state.registry.save_to_path(&path);
         }
-        Ok::<_, String>(id)
+        Ok::<_, String>(session_id)
     });
 
     match result {
@@ -346,18 +339,18 @@ pub extern "C" fn hh_request_desktop_size(session_id: u64, w: u32, h: u32) -> *m
     if w == 0 || h == 0 {
         return err_cstr("invalid desktop size");
     }
-    send_cmd_unfocused(
-        session_id,
-        SessionCommand::SetDesktopSize { w, h },
-    )
+    send_cmd_unfocused(session_id, SessionCommand::SetDesktopSize { w, h })
 }
 
 #[no_mangle]
 pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
     let result = RT.block_on(async {
-        let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
-        if let Some(handle) = state.sessions.remove(&session_id) {
+        let handle = {
+            let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
             state.manager.remove(SessionId(session_id));
+            state.sessions.remove(&session_id)
+        };
+        if let Some(handle) = handle {
             handle.close().await?;
         }
         Ok::<_, String>(())
@@ -370,14 +363,19 @@ pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
 
 fn send_cmd(session_id: u64, cmd: SessionCommand) -> *mut c_char {
     let result = RT.block_on(async {
-        let state = STATE.lock().map_err(|_| "lock".to_string())?;
-        if !state.focus.allows(SessionId(session_id)) {
-            return Err("focus not grabbed".to_string());
-        }
-        let Some(handle) = state.sessions.get(&session_id) else {
-            return Err("unknown session".to_string());
+        let tx = {
+            let state = STATE.lock().map_err(|_| "lock".to_string())?;
+            if !state.focus.allows(SessionId(session_id)) {
+                return Err("focus not grabbed".to_string());
+            }
+            let Some(handle) = state.sessions.get(&session_id) else {
+                return Err("unknown session".to_string());
+            };
+            handle.commands.clone()
         };
-        handle.send(cmd).await
+        tx.send(cmd)
+            .await
+            .map_err(|_| "session command channel closed".to_string())
     });
     match result {
         Ok(()) => ok_cstr("ok"),
@@ -404,11 +402,16 @@ fn send_cmd_try(session_id: u64, cmd: SessionCommand) -> c_int {
 
 fn send_cmd_unfocused(session_id: u64, cmd: SessionCommand) -> *mut c_char {
     let result = RT.block_on(async {
-        let state = STATE.lock().map_err(|_| "lock".to_string())?;
-        let Some(handle) = state.sessions.get(&session_id) else {
-            return Err("unknown session".to_string());
+        let tx = {
+            let state = STATE.lock().map_err(|_| "lock".to_string())?;
+            let Some(handle) = state.sessions.get(&session_id) else {
+                return Err("unknown session".to_string());
+            };
+            handle.commands.clone()
         };
-        handle.send(cmd).await
+        tx.send(cmd)
+            .await
+            .map_err(|_| "session command channel closed".to_string())
     });
     match result {
         Ok(()) => ok_cstr("ok"),
@@ -507,7 +510,8 @@ pub extern "C" fn hh_registry_upsert(
         Ok(mut s) => {
             let prev = s.registry.get(&id).cloned();
             let mut entry = ConnectionEntry::new(id, host, port);
-            entry.display_name = display_name.or_else(|| prev.as_ref().and_then(|p| p.display_name.clone()));
+            entry.display_name =
+                display_name.or_else(|| prev.as_ref().and_then(|p| p.display_name.clone()));
             entry.display_number = helmhost_core::display_from_port(port)
                 .or_else(|| prev.as_ref().and_then(|p| p.display_number));
             entry.tags = prev.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
@@ -521,6 +525,8 @@ pub extern "C" fn hh_registry_upsert(
                 .unwrap_or(false);
             entry.view_only = prev.as_ref().map(|p| p.view_only).unwrap_or(false);
             entry.notes = prev.as_ref().and_then(|p| p.notes.clone());
+            entry.profile_id = prev.as_ref().and_then(|p| p.profile_id.clone());
+            entry.profile_none = prev.as_ref().map(|p| p.profile_none).unwrap_or(false);
             s.registry.upsert(entry);
             if let Some(path) = s.registry_path.clone() {
                 let _ = s.registry.save_to_path(&path);
@@ -603,6 +609,103 @@ pub extern "C" fn hh_registry_export() -> *mut c_char {
             Ok(j) => ok_cstr(j),
             Err(e) => err_cstr(e),
         },
+        Err(_) => err_cstr("lock"),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hh_profile_list() -> *mut c_char {
+    match STATE.lock() {
+        Ok(s) => {
+            let list: Vec<&ConnectionProfile> = s.registry.list_profiles().collect();
+            match serde_json::to_string(&list) {
+                Ok(j) => ok_cstr(j),
+                Err(e) => err_cstr(e.to_string()),
+            }
+        }
+        Err(_) => err_cstr("lock"),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hh_profile_upsert_json(json: *const c_char) -> *mut c_char {
+    let raw = match cstr_to_string(json) {
+        Ok(v) => v,
+        Err(e) => return err_cstr(e),
+    };
+    eprintln!("[hh_profile_upsert_json] raw={raw}");
+    let profile: ConnectionProfile = match serde_json::from_str(&raw) {
+        Ok(e) => e,
+        Err(e) => return err_cstr(e.to_string()),
+    };
+    eprintln!(
+        "[hh_profile_upsert_json] parsed id={} domain={} default_display={:?}",
+        profile.id, profile.domain, profile.default_display
+    );
+    match STATE.lock() {
+        Ok(mut s) => {
+            s.registry.upsert_profile(profile);
+            if let Some(path) = s.registry_path.clone() {
+                if let Err(e) = s.registry.save_to_path(&path) {
+                    eprintln!("[hh_profile_upsert_json] save error: {e} path={path:?}");
+                } else {
+                    eprintln!("[hh_profile_upsert_json] saved path={path:?}");
+                }
+            } else {
+                eprintln!("[hh_profile_upsert_json] no registry_path — not persisted");
+            }
+            ok_cstr("ok")
+        }
+        Err(_) => err_cstr("lock"),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hh_profile_remove(id: *const c_char) -> *mut c_char {
+    let id = match cstr_to_string(id) {
+        Ok(v) => v,
+        Err(e) => return err_cstr(e),
+    };
+    match STATE.lock() {
+        Ok(mut s) => {
+            s.registry.remove_profile(&id);
+            if let Some(path) = s.registry_path.clone() {
+                let _ = s.registry.save_to_path(&path);
+            }
+            ok_cstr("ok")
+        }
+        Err(_) => err_cstr("lock"),
+    }
+}
+
+/// Resolve effective settings for an entry id (JSON of ResolvedConnectionSettings-like map).
+#[no_mangle]
+pub extern "C" fn hh_registry_resolve(id: *const c_char) -> *mut c_char {
+    let id = match cstr_to_string(id) {
+        Ok(v) => v,
+        Err(e) => return err_cstr(e),
+    };
+    match STATE.lock() {
+        Ok(s) => {
+            let Some(entry) = s.registry.get(&id) else {
+                return err_cstr("not found");
+            };
+            let r = s.registry.resolve(entry);
+            let v = serde_json::json!({
+                "prefer_vencrypt": r.prefer_vencrypt,
+                "accept_invalid_certs": r.accept_invalid_certs,
+                "view_only": r.view_only,
+                "username": r.username,
+                "profile_id": r.profile_id,
+                "domain": r.domain,
+                "connect_host": r.connect_host,
+                "display_number": r.display_number,
+            });
+            match serde_json::to_string(&v) {
+                Ok(j) => ok_cstr(j),
+                Err(e) => err_cstr(e.to_string()),
+            }
+        }
         Err(_) => err_cstr("lock"),
     }
 }

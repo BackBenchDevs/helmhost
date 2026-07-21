@@ -7,15 +7,18 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../bridge.dart';
 import '../keysyms.dart';
+import '../library/auth_dialog.dart';
 import '../logging/logger.dart';
 import '../prefs.dart';
 import '../session_helpers.dart';
 import '../storage/credential_store.dart';
 import '../thumbs.dart';
 import 'buffering_overlay.dart';
+import 'credentials.dart';
 import 'fb_texture.dart';
 import 'session_ipc.dart';
 import 'session_link_stats.dart';
@@ -28,6 +31,7 @@ class SessionPage extends StatefulWidget {
     required this.host,
     required this.port,
     this.entryId,
+    this.profileId,
     this.username,
     this.preferVencrypt = false,
     this.acceptInvalidCerts = false,
@@ -41,6 +45,7 @@ class SessionPage extends StatefulWidget {
   final String host;
   final int port;
   final String? entryId;
+  final String? profileId;
   final String? username;
   final bool preferVencrypt;
   final bool acceptInvalidCerts;
@@ -52,7 +57,7 @@ class SessionPage extends StatefulWidget {
   State<SessionPage> createState() => _SessionPageState();
 }
 
-class _SessionPageState extends State<SessionPage> {
+class _SessionPageState extends State<SessionPage> with WindowListener {
   static const _firstFrameTimeout = Duration(seconds: 15);
   static const _reconnectTimeout = Duration(seconds: 15);
   static const _maxReconnectAttempts = 3;
@@ -77,11 +82,16 @@ class _SessionPageState extends State<SessionPage> {
   bool _pulling = false;
   bool _paintScheduled = false;
   bool _hubNotifiedEnd = false;
+  bool _sessionTornDown = false;
+  bool _windowClosing = false;
   bool _reconnectDialogShowing = false;
   String? _lastError;
   SessionConnState _connState = SessionConnState.connecting;
   int _reconnectAttempt = 0;
+  String? _sessionPassword;
+  String? _sessionUsername;
   final _linkStats = SessionLinkStats();
+  final _creds = createCredentialStore();
   final _viewKey = GlobalKey();
   final _focusNode = FocusNode();
   final _downKeysyms = <int, int>{};
@@ -113,6 +123,10 @@ class _SessionPageState extends State<SessionPage> {
       if (mounted) _focusNode.requestFocus();
     });
     unawaited(_initTexture());
+    if (widget.closeOnExit) {
+      windowManager.addListener(this);
+      unawaited(windowManager.setPreventClose(true));
+    }
   }
 
   void _armFirstFrameTimeout() {
@@ -171,26 +185,107 @@ class _SessionPageState extends State<SessionPage> {
     });
   }
 
+  bool _isNativeSessionAlive() {
+    try {
+      _bridge.fbSize(_sessionId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
-  void dispose() {
+  void onWindowClose() async {
+    if (_windowClosing) return;
+
+    final skipConfirm = _sessionTornDown ||
+        _connState == SessionConnState.disconnected ||
+        _connState == SessionConnState.timedOut ||
+        !_isNativeSessionAlive();
+
+    if (!skipConfirm && mounted) {
+      final ok = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Disconnect session?'),
+          content: Text(
+            'Close this window and disconnect from ${widget.host}:${widget.port}?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Disconnect'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) {
+        // Keep window open; re-arm prevent-close.
+        await windowManager.setPreventClose(true);
+        return;
+      }
+    }
+
+    _windowClosing = true;
+    widget.logger.info('session window closing — disconnecting', {
+      'sessionId': _sessionId,
+      'host': widget.host,
+      'port': widget.port,
+    });
+    await _teardownSession(reason: 'window_closed');
+    // NEVER call windowManager.destroy() here — on macOS that is
+    // NSApp.terminate and kills Hub + every session window.
+    await windowManager.setPreventClose(false);
+    await windowManager.close();
+  }
+
+  /// Disconnect RFB + notify Hub. Idempotent.
+  Future<void> _teardownSession({required String reason}) async {
+    if (_sessionTornDown) return;
+    _sessionTornDown = true;
     _pollTimer?.cancel();
     _thumbTimer?.cancel();
     _resizeDebounce?.cancel();
     _firstFrameTimer?.cancel();
     _statsUiTimer?.cancel();
-    _captureThumb();
-    unawaited(_notifyHubEnded(reason: 'window_closed'));
-    unawaited(_fbTex?.dispose() ?? Future<void>.value());
-    _fbTex = null;
+    try {
+      _captureThumb();
+    } catch (_) {}
+    await _notifyHubEnded(reason: reason);
     _releaseAllKeys();
     if (widget.closeOnExit) {
       try {
         _bridge.close(_sessionId);
-      } catch (_) {}
+      } catch (e) {
+        widget.logger.warn('session close failed', {
+          'sessionId': _sessionId,
+          'error': '$e',
+        });
+      }
     }
     try {
       _bridge.releaseFocus();
     } catch (_) {}
+    try {
+      await _fbTex?.dispose();
+    } catch (_) {}
+    _fbTex = null;
+  }
+
+  @override
+  void dispose() {
+    if (widget.closeOnExit) {
+      windowManager.removeListener(this);
+    }
+    // OS close goes through [onWindowClose]; dispose is a safety net.
+    if (!_sessionTornDown) {
+      unawaited(_teardownSession(reason: 'disposed'));
+    }
     _focusNode.dispose();
     _frame?.dispose();
     super.dispose();
@@ -473,6 +568,13 @@ class _SessionPageState extends State<SessionPage> {
   }
 
   Future<void> windowCloseSelf() async {
+    // Prefer prevent-close path so [onWindowClose] disconnects cleanly.
+    if (widget.closeOnExit) {
+      try {
+        await windowManager.close();
+        return;
+      } catch (_) {}
+    }
     try {
       final c = await WindowController.fromCurrentEngine();
       await c.invokeMethod(kMethodWindowClose);
@@ -499,8 +601,17 @@ class _SessionPageState extends State<SessionPage> {
       if (i > 0) {
         await Future<void>.delayed(_backoff[i - 1]);
       }
-      final ok = await _attemptReconnect();
-      if (ok) return;
+      final result = await _attemptReconnect();
+      if (result == _ReconnectOutcome.success) return;
+      if (result == _ReconnectOutcome.authCancelled) {
+        if (!mounted) return;
+        setState(() {
+          _connState = SessionConnState.disconnected;
+          _lastError = 'Password required';
+        });
+        await _showReconnectDialog(reason: _lastError!);
+        return;
+      }
     }
 
     if (!mounted) return;
@@ -511,56 +622,127 @@ class _SessionPageState extends State<SessionPage> {
     await _showReconnectDialog(reason: _lastError!);
   }
 
-  Future<bool> _attemptReconnect() async {
+  Future<_ReconnectOutcome> _attemptReconnect() async {
     final oldId = _sessionId;
     await _notifyHubEnded(reason: 'reconnect');
     try {
       _bridge.close(oldId);
     } catch (_) {}
 
-    String? password;
     final entryId = widget.entryId ?? sessionKey(widget.host, widget.port);
+    String? password;
     try {
-      password = await createCredentialStore().readPassword(entryId);
+      password = await resolvePassword(
+        store: _creds,
+        entryId: entryId,
+        sessionPassword: _sessionPassword,
+        profileId: widget.profileId,
+      );
     } catch (_) {}
 
     try {
-      final newId = _bridge.connect(
-        widget.host,
-        widget.port,
-        username: widget.username,
+      return await _connectAfterReconnect(
+        oldId: oldId,
+        username: _sessionUsername ?? widget.username,
         password: password,
-        preferVencrypt: widget.preferVencrypt,
-        acceptInvalidCerts: widget.acceptInvalidCerts,
       );
-      _bridge.grab(newId);
-      await _notifyHubReplaced(oldId, newId);
-      if (!mounted) return false;
-      setState(() {
-        _sessionId = newId;
-        _hubNotifiedEnd = false;
-        _connState = SessionConnState.connecting;
-        _lastError = null;
-      });
-      _armFirstFrameTimeout();
-
-      // Wait up to reconnect timeout for first frame.
-      final deadline = DateTime.now().add(_reconnectTimeout);
-      while (mounted && DateTime.now().isBefore(deadline)) {
-        if (_hasFramebuffer || _connState == SessionConnState.live) {
-          return true;
+    } on StateError catch (e) {
+      if (!isAuthError(e)) {
+        widget.logger.error('reconnect failed', {'error': '$e'});
+        if (mounted) {
+          setState(() => _lastError = e.toString());
         }
-        if (_connState == SessionConnState.disconnected) return false;
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        return _ReconnectOutcome.failed;
       }
-      return _hasFramebuffer || _connState == SessionConnState.live;
+      if (!mounted) return _ReconnectOutcome.authCancelled;
+      setState(() => _lastError = authErrorLabel(e));
+      final need = parseAuthNeed(e.message);
+      final creds = await showAuthDialog(
+        context,
+        need: need,
+        initialUsername: _sessionUsername ?? widget.username,
+      );
+      if (creds == null ||
+          (creds.password == null || creds.password!.isEmpty)) {
+        return _ReconnectOutcome.authCancelled;
+      }
+      _sessionPassword = creds.password;
+      if (creds.username != null && creds.username!.isNotEmpty) {
+        _sessionUsername = creds.username;
+      }
+      if (creds.savePermanently) {
+        try {
+          await persistEntryCredentials(
+            _creds,
+            entryId,
+            password: creds.password,
+            savePassword: true,
+          );
+        } catch (_) {}
+      }
+      try {
+        return await _connectAfterReconnect(
+          oldId: oldId,
+          username: _sessionUsername ?? widget.username,
+          password: _sessionPassword,
+        );
+      } catch (e2) {
+        widget.logger.error('reconnect failed', {'error': '$e2'});
+        if (mounted) {
+          setState(() {
+            _lastError = isAuthError(e2) ? authErrorLabel(e2) : e2.toString();
+          });
+        }
+        return isAuthError(e2)
+            ? _ReconnectOutcome.authCancelled
+            : _ReconnectOutcome.failed;
+      }
     } catch (e) {
       widget.logger.error('reconnect failed', {'error': '$e'});
       if (mounted) {
         setState(() => _lastError = e.toString());
       }
-      return false;
+      return _ReconnectOutcome.failed;
     }
+  }
+
+  Future<_ReconnectOutcome> _connectAfterReconnect({
+    required int oldId,
+    String? username,
+    String? password,
+  }) async {
+    final newId = _bridge.connect(
+      widget.host,
+      widget.port,
+      username: username,
+      password: password,
+      preferVencrypt: widget.preferVencrypt,
+      acceptInvalidCerts: widget.acceptInvalidCerts,
+    );
+    _bridge.grab(newId);
+    await _notifyHubReplaced(oldId, newId);
+    if (!mounted) return _ReconnectOutcome.failed;
+    setState(() {
+      _sessionId = newId;
+      _hubNotifiedEnd = false;
+      _connState = SessionConnState.connecting;
+      _lastError = null;
+    });
+    _armFirstFrameTimeout();
+
+    final deadline = DateTime.now().add(_reconnectTimeout);
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      if (_hasFramebuffer || _connState == SessionConnState.live) {
+        return _ReconnectOutcome.success;
+      }
+      if (_connState == SessionConnState.disconnected) {
+        return _ReconnectOutcome.failed;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return (_hasFramebuffer || _connState == SessionConnState.live)
+        ? _ReconnectOutcome.success
+        : _ReconnectOutcome.failed;
   }
 
   (int, int)? _remoteXY(Offset global) {
@@ -872,3 +1054,5 @@ class _SessionPageState extends State<SessionPage> {
     );
   }
 }
+
+enum _ReconnectOutcome { success, failed, authCancelled }

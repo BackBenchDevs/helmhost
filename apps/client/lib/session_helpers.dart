@@ -4,6 +4,10 @@ import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 
+import 'library/vnc_address.dart';
+
+export 'session/open_session_registry.dart';
+
 String sessionKey(String host, int port) => '$host:$port';
 
 int portFromDisplay(int display) => 5900 + display;
@@ -11,60 +15,6 @@ int portFromDisplay(int display) => 5900 + display;
 int? displayFromPort(int port) {
   if (port >= 5900 && port <= 5999) return port - 5900;
   return null;
-}
-
-class OpenSessionRef {
-  const OpenSessionRef({
-    required this.id,
-    required this.host,
-    required this.port,
-  });
-
-  final int id;
-  final String host;
-  final int port;
-
-  String get key => sessionKey(host, port);
-}
-
-OpenSessionRef? findOpenByHostPort(
-  Iterable<OpenSessionRef> sessions,
-  String host,
-  int port,
-) {
-  final want = sessionKey(host.trim(), port);
-  for (final s in sessions) {
-    if (sessionKey(s.host.trim(), s.port) == want) return s;
-  }
-  return null;
-}
-
-/// Remove open refs by session id. Returns true if anything was removed.
-bool removeOpenBySessionId(List<OpenSessionRef> sessions, int sessionId) {
-  final before = sessions.length;
-  sessions.removeWhere((s) => s.id == sessionId);
-  return sessions.length != before;
-}
-
-/// Replace an open session id (reconnect). Returns false if [oldId] missing.
-bool replaceOpenSessionId(
-  List<OpenSessionRef> sessions, {
-  required int oldId,
-  required int newId,
-  String? host,
-  int? port,
-}) {
-  for (var i = 0; i < sessions.length; i++) {
-    final s = sessions[i];
-    if (s.id != oldId) continue;
-    sessions[i] = OpenSessionRef(
-      id: newId,
-      host: host ?? s.host,
-      port: port ?? s.port,
-    );
-    return true;
-  }
-  return false;
 }
 
 /// Library card model (from registry JSON).
@@ -83,6 +33,8 @@ class LibraryCard {
     this.acceptInvalidCerts = false,
     this.viewOnly = false,
     this.notes,
+    this.profileId,
+    this.profileNone = false,
     this.openSessionId,
   });
 
@@ -99,6 +51,8 @@ class LibraryCard {
   final bool acceptInvalidCerts;
   final bool viewOnly;
   final String? notes;
+  final String? profileId;
+  final bool profileNone;
   final int? openSessionId;
 
   String get title =>
@@ -131,6 +85,8 @@ class LibraryCard {
       acceptInvalidCerts: j['accept_invalid_certs'] as bool? ?? false,
       viewOnly: j['view_only'] as bool? ?? false,
       notes: j['notes'] as String?,
+      profileId: j['profile_id'] as String?,
+      profileNone: j['profile_none'] as bool? ?? false,
       openSessionId: openSessionId,
     );
   }
@@ -149,6 +105,8 @@ class LibraryCard {
         'accept_invalid_certs': acceptInvalidCerts,
         'view_only': viewOnly,
         if (notes != null) 'notes': notes,
+        if (profileId != null) 'profile_id': profileId,
+        'profile_none': profileNone,
       };
 
   String get searchHaystack => [
@@ -160,8 +118,88 @@ class LibraryCard {
         tags.join(' '),
         username ?? '',
         notes ?? '',
+        profileId ?? '',
       ].join('\n');
 }
+
+/// Local connection profile (mirrors Rust ConnectionProfile).
+class ConnectionProfileCard {
+  const ConnectionProfileCard({
+    required this.id,
+    required this.name,
+    this.domain = '',
+    this.notes,
+    this.preferVencrypt = false,
+    this.acceptInvalidCerts = false,
+    this.viewOnly = false,
+    this.defaultUsername,
+    this.defaultDisplay,
+  });
+
+  final String id;
+  final String name;
+  final String domain;
+  final String? notes;
+  final bool preferVencrypt;
+  final bool acceptInvalidCerts;
+  final bool viewOnly;
+  final String? defaultUsername;
+  final int? defaultDisplay;
+
+  String get domainLabel {
+    final d = normalizeDomain(domain);
+    return d.isEmpty ? name : '*.$d';
+  }
+
+  factory ConnectionProfileCard.fromJson(Map<String, dynamic> j) {
+    List<String> strList(dynamic v) => v is List
+        ? v.map((e) => e.toString()).toList()
+        : <String>[];
+    var domain = (j['domain'] as String?)?.trim() ?? '';
+    if (domain.isEmpty) {
+      final search = strList(j['dns_search']);
+      if (search.isNotEmpty) domain = search.first;
+    }
+    return ConnectionProfileCard(
+      id: j['id'] as String? ?? '',
+      name: j['name'] as String? ?? '',
+      domain: normalizeDomain(domain),
+      notes: j['notes'] as String?,
+      preferVencrypt: j['prefer_vencrypt'] as bool? ?? false,
+      acceptInvalidCerts: j['accept_invalid_certs'] as bool? ?? false,
+      viewOnly: j['view_only'] as bool? ?? false,
+      defaultUsername: j['default_username'] as String?,
+      defaultDisplay: (j['default_display'] as num?)?.toInt(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'domain': normalizeDomain(domain),
+        if (notes != null) 'notes': notes,
+        'prefer_vencrypt': preferVencrypt,
+        'accept_invalid_certs': acceptInvalidCerts,
+        'view_only': viewOnly,
+        if (defaultUsername != null) 'default_username': defaultUsername,
+        // Always emit so FFI/serde never treat "omit" as an accidental clear
+        // when merging is wrong — upsert replaces the whole profile.
+        'default_display': defaultDisplay,
+      };
+}
+
+/// Parse default display from profile editor text (empty → null).
+int? parseDefaultDisplayField(String text) {
+  final t = text.trim();
+  if (t.isEmpty) return null;
+  // Allow accidental spaces / unicode; keep ASCII digits only.
+  final digits = t.replaceAll(RegExp(r'[^0-9]'), '');
+  if (digits.isEmpty) return null;
+  final n = int.tryParse(digits);
+  if (n == null || n < 0 || n > 99) return null;
+  return n;
+}
+
 
 RegExp? tryParseSearchPattern(String query) {
   final q = query.trim();
@@ -253,3 +291,196 @@ AuthNeed parseAuthNeed(String error) {
 }
 
 enum LibraryViewMode { grid, list }
+
+String normalizeDomain(String domain) => domain
+    .trim()
+    .replaceFirst(RegExp(r'^\.+'), '')
+    .replaceFirst(RegExp(r'\.+$'), '')
+    .toLowerCase();
+
+bool hostMatchesDomain(String host, String domain) {
+  final h = host.trim().toLowerCase();
+  final d = normalizeDomain(domain);
+  if (h.isEmpty || d.isEmpty) return false;
+  return h == d || h.endsWith('.$d');
+}
+
+String shortHost(String host, String domain) {
+  final h = host.trim();
+  final d = normalizeDomain(domain);
+  if (d.isEmpty) return h;
+  final lower = h.toLowerCase();
+  final suffix = '.$d';
+  if (lower.endsWith(suffix)) return h.substring(0, h.length - suffix.length);
+  if (lower == d) return '';
+  return h;
+}
+
+/// Qualify short hostname with domain (mirrors Rust `qualify_host`).
+String qualifyHost(String host, String domain) {
+  final h = host.trim();
+  final d = normalizeDomain(domain);
+  if (h.isEmpty || d.isEmpty) return h;
+  if (hostMatchesDomain(h, d)) {
+    final s = shortHost(h, d);
+    if (s.isEmpty) return d;
+    return '$s.$d';
+  }
+  if (!h.contains('.')) return '$h.$d';
+  return h;
+}
+
+String profileVaultKey(String profileId) => 'profile:$profileId';
+
+bool cardMatchesProfile(LibraryCard card, ConnectionProfileCard profile) {
+  if (card.profileNone) return false;
+  if (card.profileId != null) return card.profileId == profile.id;
+  final d = normalizeDomain(profile.domain);
+  if (d.isEmpty) return false;
+  return hostMatchesDomain(card.host, d) ||
+      hostMatchesDomain(qualifyHost(card.host, d), d);
+}
+
+/// Result of resolving an address-bar quick-connect string.
+class QuickConnectTarget {
+  const QuickConnectTarget({
+    required this.connectHost,
+    required this.port,
+    this.displayNumber,
+    this.profileId,
+    required this.entryHost,
+  });
+
+  final String connectHost;
+  final int port;
+  final int? displayNumber;
+  final String? profileId;
+  final String entryHost;
+}
+
+class QuickConnectResult {
+  const QuickConnectResult.ok(this.target) : error = null;
+  const QuickConnectResult.fail(this.error) : target = null;
+
+  final QuickConnectTarget? target;
+  final String? error;
+}
+
+/// Qualify short hosts, apply profile [defaultDisplay] when display omitted.
+QuickConnectResult resolveQuickConnect({
+  required String rawInput,
+  required List<ConnectionProfileCard> profiles,
+  String? filterProfileId,
+}) {
+  final raw = rawInput.trim();
+  if (raw.isEmpty) {
+    return const QuickConnectResult.fail('Enter a host or VNC address');
+  }
+
+  final preliminary = tryParseVncAddress(raw);
+  if (preliminary == null) {
+    return const QuickConnectResult.fail('Invalid VNC address');
+  }
+
+  final hadRawPort = raw.contains('::');
+  final displayOmitted =
+      preliminary.displayNumber == null && !hadRawPort;
+
+  ConnectionProfileCard? filterProfile;
+  if (filterProfileId != null) {
+    for (final p in profiles) {
+      if (p.id == filterProfileId) {
+        filterProfile = p;
+        break;
+      }
+    }
+  }
+
+  var host = preliminary.host;
+  final hostIsShort = !host.contains('.');
+
+  String? profileId = filterProfile?.id;
+  ConnectionProfileCard? activeProfile = filterProfile;
+
+  if (hostIsShort) {
+    if (filterProfile != null &&
+        normalizeDomain(filterProfile.domain).isEmpty) {
+      return QuickConnectResult.fail(
+        '“${filterProfile.name}” has no domain — edit the profile and set Domain',
+      );
+    }
+    var qualifyWith = filterProfile;
+    if (qualifyWith == null) {
+      final withDomain = profiles
+          .where((p) => normalizeDomain(p.domain).isNotEmpty)
+          .toList();
+      if (withDomain.length == 1) {
+        qualifyWith = withDomain.first;
+      } else if (withDomain.isEmpty) {
+        return const QuickConnectResult.fail(
+          'Create a profile with a Domain, or type a full hostname',
+        );
+      } else {
+        return const QuickConnectResult.fail(
+          'Select a group in the sidebar to connect short hostnames',
+        );
+      }
+    }
+    if (normalizeDomain(qualifyWith.domain).isEmpty) {
+      return QuickConnectResult.fail(
+        '“${qualifyWith.name}” has no domain — edit the profile and set Domain',
+      );
+    }
+    profileId = qualifyWith.id;
+    activeProfile = qualifyWith;
+    host = qualifyHost(host, qualifyWith.domain);
+  } else {
+    for (final p in profiles) {
+      if (hostMatchesDomain(host, p.domain)) {
+        profileId ??= p.id;
+        activeProfile ??= p;
+        break;
+      }
+    }
+  }
+
+  var port = preliminary.port;
+  int? displayNumber = preliminary.displayNumber;
+
+  if (displayOmitted) {
+    final def = activeProfile?.defaultDisplay;
+    if (def != null) {
+      displayNumber = def;
+      port = portFromDisplay(def);
+    }
+  }
+
+  var entryHost = host;
+  if (activeProfile != null &&
+      normalizeDomain(activeProfile.domain).isNotEmpty) {
+    final short = shortHost(host, activeProfile.domain);
+    entryHost = short.isEmpty ? host : short;
+  }
+
+  return QuickConnectResult.ok(
+    QuickConnectTarget(
+      connectHost: host,
+      port: port,
+      displayNumber: displayNumber,
+      profileId: profileId,
+      entryHost: entryHost,
+    ),
+  );
+}
+
+/// Connect port for a library card after registry resolve.
+int connectPortForCard({
+  required LibraryCard card,
+  Map<String, dynamic>? resolved,
+}) {
+  if (card.displayNumber != null) return card.port;
+  final resolvedDisplay = (resolved?['display_number'] as num?)?.toInt();
+  if (resolvedDisplay != null) return portFromDisplay(resolvedDisplay);
+  return card.port;
+}
+

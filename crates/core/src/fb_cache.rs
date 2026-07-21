@@ -55,8 +55,7 @@ impl FramebufferCache {
             }
             let dst_off = (dst_y as usize * self.width as usize + dst_x as usize) * 4;
             let len = rect.w as usize * 4;
-            self.pixels[dst_off..dst_off + len]
-                .copy_from_slice(&rgba[src_off..src_off + len]);
+            self.pixels[dst_off..dst_off + len].copy_from_slice(&rgba[src_off..src_off + len]);
         }
         Ok(())
     }
