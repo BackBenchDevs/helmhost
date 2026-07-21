@@ -23,14 +23,15 @@ static LOG_INIT: Once = Once::new();
 
 fn init_logging() {
     LOG_INIT.call_once(|| {
+        // Quiet by default; set HELMHOST_LOG=info|debug for connect chatter.
         let filter = EnvFilter::try_from_env("HELMHOST_LOG")
             .or_else(|_| EnvFilter::try_from_default_env())
-            .unwrap_or_else(|_| EnvFilter::new("info"));
+            .unwrap_or_else(|_| EnvFilter::new("warn"));
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_target(true)
             .try_init();
-        tracing::info!("helmhost-ffi logging initialized");
+        tracing::debug!("helmhost-ffi logging initialized");
     });
 }
 
@@ -179,7 +180,7 @@ pub extern "C" fn hh_connect(
         danger_accept_invalid_certs: accept_invalid_certs != 0,
     };
     let prefer = prefer_vencrypt != 0;
-    tracing::info!(
+    tracing::debug!(
         %host,
         port,
         prefer_vencrypt = prefer,
@@ -232,7 +233,7 @@ pub extern "C" fn hh_connect(
 
     match result {
         Ok(id) => {
-            tracing::info!(session_id = id, %host, port, "hh_connect ok");
+            tracing::debug!(session_id = id, %host, port, "hh_connect ok");
             ok_cstr(id.to_string())
         }
         Err(e) => {
@@ -244,7 +245,8 @@ pub extern "C" fn hh_connect(
 
 #[no_mangle]
 pub extern "C" fn hh_poll_event(session_id: u64) -> *mut c_char {
-    let result: Result<String, String> = RT.block_on(async {
+    // Sync try_recv — no block_on on the empty hot path.
+    let result: Result<String, String> = (|| {
         let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
         let Some(handle) = state.sessions.get_mut(&session_id) else {
             return Ok(encode_event(Some(SessionEvent::Error(
@@ -258,7 +260,7 @@ pub extern "C" fn hh_poll_event(session_id: u64) -> *mut c_char {
                 Ok(encode_event(Some(SessionEvent::Disconnected)))
             }
         }
-    });
+    })();
     match result {
         Ok(s) => ok_cstr(s),
         Err(e) => err_cstr(e),
@@ -311,16 +313,16 @@ pub unsafe extern "C" fn hh_fb_copy(session_id: u64, out: *mut u8, out_len: usiz
 }
 
 #[no_mangle]
-pub extern "C" fn hh_send_pointer(session_id: u64, x: i32, y: i32, buttons: u8) -> *mut c_char {
-    send_cmd(
+pub extern "C" fn hh_send_pointer(session_id: u64, x: i32, y: i32, buttons: u8) -> c_int {
+    send_cmd_try(
         session_id,
         SessionCommand::Pointer(PointerEvent { x, y, buttons }),
     )
 }
 
 #[no_mangle]
-pub extern "C" fn hh_send_key(session_id: u64, down: u8, keysym: u32) -> *mut c_char {
-    send_cmd(
+pub extern "C" fn hh_send_key(session_id: u64, down: u8, keysym: u32) -> c_int {
+    send_cmd_try(
         session_id,
         SessionCommand::Key(KeyEvent {
             down: down != 0,
@@ -380,6 +382,23 @@ fn send_cmd(session_id: u64, cmd: SessionCommand) -> *mut c_char {
     match result {
         Ok(()) => ok_cstr("ok"),
         Err(e) => err_cstr(e),
+    }
+}
+
+/// Hot-path input: try_send, no block_on, no CString. 0 = ok, -1 = error.
+fn send_cmd_try(session_id: u64, cmd: SessionCommand) -> c_int {
+    let Ok(state) = STATE.lock() else {
+        return -1;
+    };
+    if !state.focus.allows(SessionId(session_id)) {
+        return -1;
+    }
+    let Some(handle) = state.sessions.get(&session_id) else {
+        return -1;
+    };
+    match handle.commands.try_send(cmd) {
+        Ok(()) => 0,
+        Err(_) => -1,
     }
 }
 

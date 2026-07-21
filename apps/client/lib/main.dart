@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'library/hub_page.dart';
 import 'prefs.dart';
+import 'session/session_ipc.dart';
 import 'session/session_page.dart';
 import 'session_helpers.dart';
 
@@ -25,27 +26,41 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  await controller.setWindowMethodHandler((call) async {
-    switch (call.method) {
-      case 'window_close':
-        await windowManager.close();
-        return null;
-      default:
-        throw MissingPluginException(call.method);
-    }
-  });
-
   final prefs = await AppPrefs.open();
   final role = winArgs['role'] as String? ?? 'hub';
   if (role == 'session') {
+    await controller.setWindowMethodHandler((call) async {
+      switch (call.method) {
+        case kMethodWindowClose:
+          await windowManager.close();
+          return null;
+        default:
+          throw MissingPluginException(call.method);
+      }
+    });
     final sessionId = (winArgs['sessionId'] as num).toInt();
     final title = winArgs['title'] as String? ?? 'Session';
-    final entryId = winArgs['entryId'] as String?;
+    final entryId = winArgs['entryId'] as String? ?? title;
+    final host = winArgs['host'] as String? ??
+        (entryId.contains(':') ? entryId.split(':').first : entryId);
+    final port = (winArgs['port'] as num?)?.toInt() ??
+        (entryId.contains(':')
+            ? int.tryParse(entryId.split(':').last) ?? 5900
+            : 5900);
+    final username = winArgs['username'] as String?;
+    final preferVencrypt = winArgs['prefer_vencrypt'] as bool? ?? false;
+    final acceptInvalidCerts =
+        winArgs['accept_invalid_certs'] as bool? ?? false;
     await windowManager.setTitle(title);
     runApp(SessionApp(
       sessionId: sessionId,
       title: title,
       entryId: entryId,
+      host: host,
+      port: port,
+      username: username,
+      preferVencrypt: preferVencrypt,
+      acceptInvalidCerts: acceptInvalidCerts,
       themeMode: prefs.themeMode,
       prefs: prefs,
     ));
@@ -107,14 +122,24 @@ class SessionApp extends StatelessWidget {
     super.key,
     required this.sessionId,
     required this.title,
+    required this.host,
+    required this.port,
     this.entryId,
+    this.username,
+    this.preferVencrypt = false,
+    this.acceptInvalidCerts = false,
     this.themeMode = ThemeMode.system,
     this.prefs,
   });
 
   final int sessionId;
   final String title;
+  final String host;
+  final int port;
   final String? entryId;
+  final String? username;
+  final bool preferVencrypt;
+  final bool acceptInvalidCerts;
   final ThemeMode themeMode;
   final AppPrefs? prefs;
 
@@ -129,6 +154,11 @@ class SessionApp extends StatelessWidget {
         sessionId: sessionId,
         title: title,
         entryId: entryId,
+        host: host,
+        port: port,
+        username: username,
+        preferVencrypt: preferVencrypt,
+        acceptInvalidCerts: acceptInvalidCerts,
         closeOnExit: true,
         prefs: prefs,
       ),

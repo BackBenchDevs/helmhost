@@ -167,7 +167,7 @@ where
     )
     .await?;
     write_all(&mut stream, &encode_set_encodings(&preferred_encodings())).await?;
-    tracing::info!(
+    tracing::debug!(
         width = init.width,
         height = init.height,
         encodings = ?preferred_encodings(),
@@ -286,12 +286,22 @@ async fn reader_loop<R: AsyncRead + Unpin>(
                 let (nrects, _) = parse_fb_update_header(&hdr)?;
                 // TigerVNC: LastRect ends the update early (nRects may be 0xFFFF).
                 let mut remaining = nrects;
+                let mut dirty: Option<Rect> = None;
                 while remaining > 0 {
                     remaining -= 1;
                     match handle_rect(rd, &ev_tx, &state, &mut zrle).await? {
-                        RectAction::Continue => {}
-                        RectAction::EndFramebufferUpdate => break,
+                        (RectAction::Continue, Some(r)) => {
+                            dirty = Some(match dirty {
+                                Some(d) => d.union(r),
+                                None => r,
+                            });
+                        }
+                        (RectAction::Continue, None) => {}
+                        (RectAction::EndFramebufferUpdate, _) => break,
                     }
+                }
+                if let Some(rect) = dirty {
+                    send_event(&ev_tx, SessionEvent::FramebufferDirty { rect }).await;
                 }
                 let _ = cmd_tx
                     .send(SessionCommand::RequestUpdate { incremental: true })
@@ -328,7 +338,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
     ev_tx: &mpsc::Sender<SessionEvent>,
     state: &Arc<Mutex<SharedDesktop>>,
     zrle: &mut ZrleStream,
-) -> Result<RectAction, String> {
+) -> Result<(RectAction, Option<Rect>), String> {
     let rh = read_exact(rd, 12).await?;
     let (hdr, _) = parse_rect_header(&rh)?;
 
@@ -352,8 +362,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 .map_err(|_| "fb cache lock".to_string())?
                 .put_damage(rect, &rgba)?;
             drop(g);
-            send_event(ev_tx, SessionEvent::FramebufferDirty { rect }).await;
-            Ok(RectAction::Continue)
+            Ok((RectAction::Continue, Some(rect)))
         }
         ENC_COPYRECT => {
             let src = read_exact(rd, 4).await?;
@@ -370,8 +379,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 .map_err(|_| "fb cache lock".to_string())?
                 .copy_rect(rect, i32::from(sx), i32::from(sy))?;
             drop(g);
-            send_event(ev_tx, SessionEvent::FramebufferDirty { rect }).await;
-            Ok(RectAction::Continue)
+            Ok((RectAction::Continue, Some(rect)))
         }
         ENC_ZRLE => {
             let lenb = read_exact(rd, 4).await?;
@@ -387,7 +395,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 };
                 decode_zrle_with(zrle, &pf, 0, 0, &framed)
                     .map_err(|e| format!("zrle decode failed: {e}"))?;
-                return Ok(RectAction::Continue);
+                return Ok((RectAction::Continue, None));
             }
             let g = state.lock().await;
             match decode_zrle_with(
@@ -409,8 +417,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                         .map_err(|_| "fb cache lock".to_string())?
                         .put_damage(rect, &rgba)?;
                     drop(g);
-                    send_event(ev_tx, SessionEvent::FramebufferDirty { rect }).await;
-                    Ok(RectAction::Continue)
+                    Ok((RectAction::Continue, Some(rect)))
                 }
                 Err(e) => {
                     drop(g);
@@ -430,7 +437,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
             let h = u32::from(hdr.h);
             drop(g);
             send_event(ev_tx, SessionEvent::DesktopResize { w, h }).await;
-            Ok(RectAction::Continue)
+            Ok((RectAction::Continue, None))
         }
         ENC_EXTENDED_DESKTOP_SIZE => {
             // Payload: number-of-screens (u8) + pad3 + screens×16.
@@ -443,7 +450,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
             // reasonClient == 1: only apply size when result == 0 (success).
             const REASON_CLIENT: u16 = 1;
             if reason == REASON_CLIENT && result != 0 {
-                return Ok(RectAction::Continue);
+                return Ok((RectAction::Continue, None));
             }
             let mut g = state.lock().await;
             g.width = hdr.w;
@@ -456,13 +463,13 @@ async fn handle_rect<R: AsyncRead + Unpin>(
             let h = u32::from(hdr.h);
             drop(g);
             send_event(ev_tx, SessionEvent::DesktopResize { w, h }).await;
-            Ok(RectAction::Continue)
+            Ok((RectAction::Continue, None))
         }
-        ENC_LAST_RECT => Ok(RectAction::EndFramebufferUpdate),
+        ENC_LAST_RECT => Ok((RectAction::EndFramebufferUpdate, None)),
         other => {
             if hdr.w == 0 || hdr.h == 0 {
                 // Zero-area unknown encoding: no payload to skip
-                Ok(RectAction::Continue)
+                Ok((RectAction::Continue, None))
             } else {
                 Err(format!(
                     "unknown encoding {other} ({})",

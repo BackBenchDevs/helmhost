@@ -52,3 +52,7 @@ class DebugPrintLogger implements ILogger {
   void error(String msg, [Map<String, Object?>? ctx]) =>
       _emit('ERROR', msg, ctx);
 }
+
+/// Debug → [DebugPrintLogger]; release → [SilentLogger].
+ILogger defaultLogger({String module = 'helmhost'}) =>
+    kDebugMode ? DebugPrintLogger(module: module) : const SilentLogger();

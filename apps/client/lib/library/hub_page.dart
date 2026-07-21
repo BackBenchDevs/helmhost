@@ -1,16 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../bridge.dart';
 import '../logging/logger.dart';
+import '../session/session_ipc.dart';
 import '../session_helpers.dart';
 import '../storage/credential_store.dart';
 import '../thumbs.dart';
@@ -19,18 +20,18 @@ import 'connection_editor.dart';
 import 'library_card_widgets.dart';
 
 extension WindowControllerExt on WindowController {
-  Future<void> closeWindow() => invokeMethod('window_close');
+  Future<void> closeWindow() => invokeMethod(kMethodWindowClose);
 }
 
 class HubPage extends StatefulWidget {
-  const HubPage({
+  HubPage({
     super.key,
     required this.themeMode,
     required this.onThemeModeChanged,
     required this.viewMode,
     required this.onViewModeChanged,
-    this.logger = const DebugPrintLogger(module: 'hub'),
-  });
+    ILogger? logger,
+  }) : logger = logger ?? defaultLogger(module: 'hub');
 
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeModeChanged;
@@ -66,7 +67,62 @@ class _HubPageState extends State<HubPage> with WindowListener {
       const Duration(seconds: 1),
       (_) => _refreshLiveThumbs(),
     );
+    unawaited(_registerIpc());
     _boot();
+  }
+
+  Future<void> _registerIpc() async {
+    final c = await WindowController.fromCurrentEngine();
+    await c.setWindowMethodHandler((call) async {
+      switch (call.method) {
+        case kMethodWindowClose:
+          await windowManager.close();
+          return null;
+        case kMethodSessionEnded:
+          _onSessionEnded(call.arguments);
+          return null;
+        case kMethodSessionReplaced:
+          _onSessionReplaced(call.arguments);
+          return null;
+        default:
+          throw MissingPluginException(call.method);
+      }
+    });
+  }
+
+  void _onSessionEnded(dynamic raw) {
+    final args = _asArgMap(raw);
+    final id = (args['sessionId'] as num?)?.toInt();
+    if (id == null) return;
+    if (!removeOpenBySessionId(_sessions, id)) return;
+    if (!mounted) return;
+    setState(_reloadCards);
+  }
+
+  void _onSessionReplaced(dynamic raw) {
+    final args = _asArgMap(raw);
+    final oldId = (args['oldId'] as num?)?.toInt();
+    final newId = (args['newId'] as num?)?.toInt();
+    if (oldId == null || newId == null) return;
+    final host = args['host'] as String?;
+    final port = (args['port'] as num?)?.toInt();
+    final ok = replaceOpenSessionId(
+      _sessions,
+      oldId: oldId,
+      newId: newId,
+      host: host,
+      port: port,
+    );
+    if (!ok && host != null && port != null) {
+      _sessions.add(OpenSessionRef(id: newId, host: host, port: port));
+    }
+    if (!mounted) return;
+    setState(_reloadCards);
+  }
+
+  Map<String, dynamic> _asArgMap(dynamic raw) {
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return {};
   }
 
   void _onSearchChanged() {
@@ -157,12 +213,25 @@ class _HubPageState extends State<HubPage> with WindowListener {
     if (changed && mounted) setState(() {});
   }
 
-  Future<void> _openSessionWindow(int id, String title) async {
+  Future<void> _openSessionWindow(
+    int id,
+    String title, {
+    required String host,
+    required int port,
+    String? username,
+    bool preferVencrypt = false,
+    bool acceptInvalidCerts = false,
+  }) async {
     final args = jsonEncode({
       'role': 'session',
       'sessionId': id,
       'title': title,
       'entryId': title,
+      'host': host,
+      'port': port,
+      if (username != null) 'username': username,
+      'prefer_vencrypt': preferVencrypt,
+      'accept_invalid_certs': acceptInvalidCerts,
     });
     for (final c in await WindowController.getAll()) {
       if (c.arguments.isEmpty) continue;
@@ -250,6 +319,15 @@ class _HubPageState extends State<HubPage> with WindowListener {
     );
   }
 
+  bool _isNativeSessionAlive(HelmBridge b, int sessionId) {
+    try {
+      b.fbSize(sessionId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _connectTo(
     String host,
     int port, {
@@ -266,14 +344,30 @@ class _HubPageState extends State<HubPage> with WindowListener {
 
     final existing = findOpenByHostPort(_sessions, host, port);
     if (existing != null) {
-      b.grab(existing.id);
-      await _openSessionWindow(existing.id, sessionKey(host, port));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Session already open')),
+      if (_isNativeSessionAlive(b, existing.id)) {
+        b.grab(existing.id);
+        await _openSessionWindow(
+          existing.id,
+          sessionKey(host, port),
+          host: host,
+          port: port,
+          username: username,
+          preferVencrypt: preferVencrypt,
+          acceptInvalidCerts: acceptInvalidCerts,
         );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Session already open')),
+          );
+        }
+        return;
       }
-      return;
+      // Stale open ref — purge and connect fresh.
+      removeOpenBySessionId(_sessions, existing.id);
+      try {
+        b.close(existing.id);
+      } catch (_) {}
+      if (mounted) setState(_reloadCards);
     }
 
     setState(() => _connecting = true);
@@ -353,7 +447,15 @@ class _HubPageState extends State<HubPage> with WindowListener {
         _sessions.add(OpenSessionRef(id: id, host: host, port: port));
         _reloadCards();
       });
-      await _openSessionWindow(id, key);
+      await _openSessionWindow(
+        id,
+        key,
+        host: host,
+        port: port,
+        username: username,
+        preferVencrypt: preferVencrypt,
+        acceptInvalidCerts: acceptInvalidCerts,
+      );
     } on StateError catch (e) {
       final need = parseAuthNeed(e.message);
       if (need != AuthNeed.none && mounted) {

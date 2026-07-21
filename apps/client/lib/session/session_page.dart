@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -12,22 +13,37 @@ import '../keysyms.dart';
 import '../logging/logger.dart';
 import '../prefs.dart';
 import '../session_helpers.dart';
+import '../storage/credential_store.dart';
 import '../thumbs.dart';
+import 'buffering_overlay.dart';
+import 'fb_texture.dart';
+import 'session_ipc.dart';
+import 'session_link_stats.dart';
 
 class SessionPage extends StatefulWidget {
-  const SessionPage({
+  SessionPage({
     super.key,
     required this.sessionId,
     required this.title,
+    required this.host,
+    required this.port,
     this.entryId,
+    this.username,
+    this.preferVencrypt = false,
+    this.acceptInvalidCerts = false,
     this.closeOnExit = true,
     this.prefs,
-    this.logger = const DebugPrintLogger(module: 'session'),
-  });
+    ILogger? logger,
+  }) : logger = logger ?? defaultLogger(module: 'session');
 
   final int sessionId;
   final String title;
+  final String host;
+  final int port;
   final String? entryId;
+  final String? username;
+  final bool preferVencrypt;
+  final bool acceptInvalidCerts;
   final bool closeOnExit;
   final AppPrefs? prefs;
   final ILogger logger;
@@ -37,16 +53,35 @@ class SessionPage extends StatefulWidget {
 }
 
 class _SessionPageState extends State<SessionPage> {
+  static const _firstFrameTimeout = Duration(seconds: 15);
+  static const _reconnectTimeout = Duration(seconds: 15);
+  static const _maxReconnectAttempts = 3;
+  static const _backoff = [
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+  ];
+
   late final HelmBridge _bridge;
+  late int _sessionId;
   Timer? _pollTimer;
+  Timer? _firstFrameTimer;
+  Timer? _statsUiTimer;
   ui.Image? _frame;
+  FbTextureController? _fbTex;
+  int? _textureId;
   int _fw = 0;
   int _fh = 0;
   bool _grabbed = true;
   bool _dirty = false;
   bool _pulling = false;
   bool _paintScheduled = false;
+  bool _hubNotifiedEnd = false;
+  bool _reconnectDialogShowing = false;
   String? _lastError;
+  SessionConnState _connState = SessionConnState.connecting;
+  int _reconnectAttempt = 0;
+  final _linkStats = SessionLinkStats();
   final _viewKey = GlobalKey();
   final _focusNode = FocusNode();
   final _downKeysyms = <int, int>{};
@@ -55,20 +90,84 @@ class _SessionPageState extends State<SessionPage> {
   Timer? _resizeDebounce;
   int _lastReqW = 0;
   int _lastReqH = 0;
-  /// Stable pixel buffer for async image decode (not the bridge scratch).
-  Uint8List? _decodeBuf;
+  static final bool _paintTrace =
+      const bool.fromEnvironment('HELMHOST_PAINT_TRACE', defaultValue: false);
 
   @override
   void initState() {
     super.initState();
+    _sessionId = widget.sessionId;
     _scaleMode = widget.prefs?.viewScaleMode ?? ViewScaleMode.fit;
     _bridge = HelmBridge.open();
-    _bridge.grab(widget.sessionId);
-    // Poll protocol events; paint at most once per vsync when dirty.
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 8), (_) => _pollEvents());
-    _thumbTimer = Timer.periodic(const Duration(seconds: 5), (_) => _captureThumb());
+    _bridge.grab(_sessionId);
+    _pollTimer =
+        Timer.periodic(const Duration(milliseconds: 8), (_) => _pollEvents());
+    _thumbTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) => _captureThumb());
+    _statsUiTimer =
+        Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _connState == SessionConnState.live) setState(() {});
+    });
+    _armFirstFrameTimeout();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focusNode.requestFocus();
+    });
+    unawaited(_initTexture());
+  }
+
+  void _armFirstFrameTimeout() {
+    _firstFrameTimer?.cancel();
+    _firstFrameTimer = Timer(_firstFrameTimeout, _onFirstFrameTimeout);
+  }
+
+  void _onFirstFrameTimeout() {
+    if (!mounted) return;
+    if (_connState != SessionConnState.connecting &&
+        _connState != SessionConnState.reconnecting) {
+      return;
+    }
+    if (_hasFramebuffer) return;
+    if (_connState == SessionConnState.reconnecting) {
+      // Attempt timed out — continue reconnect loop from caller.
+      return;
+    }
+    setState(() {
+      _connState = SessionConnState.timedOut;
+      _lastError = 'Timed out waiting for framebuffer';
+    });
+    unawaited(_showReconnectDialog(reason: _lastError!));
+  }
+
+  bool get _hasFramebuffer =>
+      (_fw > 0 && _fh > 0) && (_textureId != null || _frame != null);
+
+  Future<void> _initTexture() async {
+    final tex = await FbTextureController.create();
+    if (!mounted || tex == null) return;
+    setState(() {
+      _fbTex = tex;
+      _textureId = tex.textureId;
+    });
+  }
+
+  Future<void> _notifyHubEnded({String reason = 'ended'}) async {
+    if (_hubNotifiedEnd) return;
+    _hubNotifiedEnd = true;
+    await notifyHub(kMethodSessionEnded, {
+      'sessionId': _sessionId,
+      'host': widget.host,
+      'port': widget.port,
+      'reason': reason,
+    });
+  }
+
+  Future<void> _notifyHubReplaced(int oldId, int newId) async {
+    _hubNotifiedEnd = false;
+    await notifyHub(kMethodSessionReplaced, {
+      'oldId': oldId,
+      'newId': newId,
+      'host': widget.host,
+      'port': widget.port,
     });
   }
 
@@ -77,11 +176,16 @@ class _SessionPageState extends State<SessionPage> {
     _pollTimer?.cancel();
     _thumbTimer?.cancel();
     _resizeDebounce?.cancel();
+    _firstFrameTimer?.cancel();
+    _statsUiTimer?.cancel();
     _captureThumb();
+    unawaited(_notifyHubEnded(reason: 'window_closed'));
+    unawaited(_fbTex?.dispose() ?? Future<void>.value());
+    _fbTex = null;
     _releaseAllKeys();
     if (widget.closeOnExit) {
       try {
-        _bridge.close(widget.sessionId);
+        _bridge.close(_sessionId);
       } catch (_) {}
     }
     try {
@@ -95,7 +199,7 @@ class _SessionPageState extends State<SessionPage> {
   void _releaseAllKeys() {
     for (final sym in _downKeysyms.values) {
       try {
-        _bridge.sendKey(widget.sessionId, false, sym);
+        _bridge.sendKey(_sessionId, false, sym);
       } catch (_) {}
     }
     _downKeysyms.clear();
@@ -103,7 +207,7 @@ class _SessionPageState extends State<SessionPage> {
 
   void _setGrabbed(bool grab) {
     if (grab) {
-      _bridge.grab(widget.sessionId);
+      _bridge.grab(_sessionId);
       _focusNode.requestFocus();
     } else {
       _releaseAllKeys();
@@ -134,7 +238,6 @@ class _SessionPageState extends State<SessionPage> {
   void _scheduleRemoteResize() {
     if (!_scaleMode.usesRemoteResize) return;
     _resizeDebounce?.cancel();
-    // TigerVNC: rate-limit to ~100ms.
     _resizeDebounce = Timer(const Duration(milliseconds: 100), () {
       if (!mounted || !_scaleMode.usesRemoteResize) return;
       final box = _viewKey.currentContext?.findRenderObject() as RenderBox?;
@@ -144,7 +247,7 @@ class _SessionPageState extends State<SessionPage> {
       if (w <= 0 || h <= 0) return;
       if (w == _fw && h == _fh) return;
       try {
-        _bridge.requestDesktopSize(widget.sessionId, w, h);
+        _bridge.requestDesktopSize(_sessionId, w, h);
       } catch (e) {
         widget.logger.warn('requestDesktopSize failed', {'error': '$e'});
       }
@@ -153,7 +256,7 @@ class _SessionPageState extends State<SessionPage> {
 
   Future<void> _captureThumb() async {
     final id = widget.entryId ?? widget.title;
-    await saveSessionThumb(_bridge, id, widget.sessionId);
+    await saveSessionThumb(_bridge, id, _sessionId);
   }
 
   void _onBell() {
@@ -170,13 +273,25 @@ class _SessionPageState extends State<SessionPage> {
     final text = data?.text;
     if (text == null || text.isEmpty) return;
     try {
-      _bridge.sendClipboard(widget.sessionId, text);
+      _bridge.sendClipboard(_sessionId, text);
     } catch (_) {}
   }
 
   void _markDirty() {
+    _linkStats.recordFrame();
     _dirty = true;
     _schedulePaint();
+  }
+
+  void _onFirstFrameReady() {
+    _firstFrameTimer?.cancel();
+    if (_connState != SessionConnState.live) {
+      setState(() {
+        _connState = SessionConnState.live;
+        _lastError = null;
+        _reconnectAttempt = 0;
+      });
+    }
   }
 
   void _schedulePaint() {
@@ -207,19 +322,46 @@ class _SessionPageState extends State<SessionPage> {
 
   Future<void> _pullFramebuffer() async {
     final sw = Stopwatch()..start();
-    final (w, h) = _bridge.fbSize(widget.sessionId);
+    final (w, h) = _bridge.fbSize(_sessionId);
     if (w <= 0 || h <= 0) return;
     _fw = w;
     _fh = h;
-    final pixels = _bridge.fbCopy(widget.sessionId, w, h);
-    final len = pixels.length;
-    if (_decodeBuf == null || _decodeBuf!.length != len) {
-      _decodeBuf = Uint8List(len);
+
+    final tex = _fbTex;
+    if (tex != null) {
+      final presented = await tex.present(_sessionId);
+      if (!mounted) return;
+      if (presented) {
+        _onFirstFrameReady();
+        if (_textureId != tex.textureId || _frame != null) {
+          setState(() {
+            _textureId = tex.textureId;
+            _frame?.dispose();
+            _frame = null;
+            _lastError = null;
+          });
+        }
+        if (kDebugMode && _paintTrace && sw.elapsedMilliseconds > 16) {
+          widget.logger.debug('paint slow', {
+            'w': w,
+            'h': h,
+            'ms': sw.elapsedMilliseconds,
+            'path': 'texture',
+          });
+        }
+        return;
+      }
+      // Soft fail / skipped — fall through to Dart decode path.
     }
-    _decodeBuf!.setRange(0, len, pixels);
+
+    await _pullFramebufferDecode(w, h, sw);
+  }
+
+  Future<void> _pullFramebufferDecode(int w, int h, Stopwatch sw) async {
+    final pixels = _bridge.fbCopy(_sessionId, w, h);
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
-      _decodeBuf!,
+      pixels,
       w,
       h,
       ui.PixelFormat.rgba8888,
@@ -230,25 +372,33 @@ class _SessionPageState extends State<SessionPage> {
       img.dispose();
       return;
     }
+    _onFirstFrameReady();
     setState(() {
       _frame?.dispose();
       _frame = img;
+      // Prefer RawImage until texture present works.
+      _textureId = null;
       _lastError = null;
     });
-    if (kDebugMode && sw.elapsedMilliseconds > 16) {
+    if (kDebugMode && _paintTrace && sw.elapsedMilliseconds > 16) {
       widget.logger.debug('paint slow', {
         'w': w,
         'h': h,
         'ms': sw.elapsedMilliseconds,
+        'path': 'decode',
       });
     }
   }
 
   void _pollEvents() {
     if (!mounted) return;
+    if (_connState == SessionConnState.timedOut ||
+        _connState == SessionConnState.disconnected) {
+      // Still drain queue so we don't backlog, but ignore for UI.
+    }
     try {
       for (var i = 0; i < 64; i++) {
-        final ev = _bridge.pollEvent(widget.sessionId);
+        final ev = _bridge.pollEvent(_sessionId);
         final type = ev['type'] as String? ?? 'none';
         if (type == 'none') break;
         if (type == 'desktop_resize') {
@@ -266,21 +416,150 @@ class _SessionPageState extends State<SessionPage> {
               ? (ev['message'] as String? ?? ev.toString())
               : 'Disconnected';
           widget.logger.warn(type, {
-            'sessionId': widget.sessionId,
+            'sessionId': _sessionId,
             'message': msg,
           });
-          if (mounted) {
-            setState(() => _lastError = msg);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(msg)),
-            );
-          }
+          unawaited(_handleDisconnect(msg));
         }
       }
     } catch (e) {
       if (mounted) {
         setState(() => _lastError = e.toString());
       }
+    }
+  }
+
+  Future<void> _handleDisconnect(String msg) async {
+    if (_connState == SessionConnState.reconnecting) return;
+    await _notifyHubEnded(reason: msg);
+    if (!mounted) return;
+    setState(() {
+      _connState = SessionConnState.disconnected;
+      _lastError = msg;
+    });
+    await _showReconnectDialog(reason: msg);
+  }
+
+  Future<void> _showReconnectDialog({required String reason}) async {
+    if (!mounted || _reconnectDialogShowing) return;
+    _reconnectDialogShowing = true;
+    final action = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(_connState == SessionConnState.timedOut
+            ? 'Connection timed out'
+            : 'Disconnected'),
+        content: Text(reason),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'close'),
+            child: const Text('Close'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, 'reconnect'),
+            child: const Text('Reconnect'),
+          ),
+        ],
+      ),
+    );
+    _reconnectDialogShowing = false;
+    if (!mounted) return;
+    if (action == 'reconnect') {
+      unawaited(_runReconnectLoop());
+    } else if (action == 'close') {
+      await windowCloseSelf();
+    }
+  }
+
+  Future<void> windowCloseSelf() async {
+    try {
+      final c = await WindowController.fromCurrentEngine();
+      await c.invokeMethod(kMethodWindowClose);
+    } catch (_) {
+      // Best-effort.
+    }
+  }
+
+  Future<void> _runReconnectLoop() async {
+    setState(() {
+      _connState = SessionConnState.reconnecting;
+      _reconnectAttempt = 0;
+      _lastError = null;
+      _fw = 0;
+      _fh = 0;
+      _frame?.dispose();
+      _frame = null;
+      _linkStats.reset();
+    });
+
+    for (var i = 0; i < _maxReconnectAttempts; i++) {
+      if (!mounted) return;
+      setState(() => _reconnectAttempt = i + 1);
+      if (i > 0) {
+        await Future<void>.delayed(_backoff[i - 1]);
+      }
+      final ok = await _attemptReconnect();
+      if (ok) return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _connState = SessionConnState.disconnected;
+      _lastError = 'Reconnect failed after $_maxReconnectAttempts attempts';
+    });
+    await _showReconnectDialog(reason: _lastError!);
+  }
+
+  Future<bool> _attemptReconnect() async {
+    final oldId = _sessionId;
+    await _notifyHubEnded(reason: 'reconnect');
+    try {
+      _bridge.close(oldId);
+    } catch (_) {}
+
+    String? password;
+    final entryId = widget.entryId ?? sessionKey(widget.host, widget.port);
+    try {
+      password = await createCredentialStore().readPassword(entryId);
+    } catch (_) {}
+
+    try {
+      final newId = _bridge.connect(
+        widget.host,
+        widget.port,
+        username: widget.username,
+        password: password,
+        preferVencrypt: widget.preferVencrypt,
+        acceptInvalidCerts: widget.acceptInvalidCerts,
+      );
+      _bridge.grab(newId);
+      await _notifyHubReplaced(oldId, newId);
+      if (!mounted) return false;
+      setState(() {
+        _sessionId = newId;
+        _hubNotifiedEnd = false;
+        _connState = SessionConnState.connecting;
+        _lastError = null;
+      });
+      _armFirstFrameTimeout();
+
+      // Wait up to reconnect timeout for first frame.
+      final deadline = DateTime.now().add(_reconnectTimeout);
+      while (mounted && DateTime.now().isBefore(deadline)) {
+        if (_hasFramebuffer || _connState == SessionConnState.live) {
+          return true;
+        }
+        if (_connState == SessionConnState.disconnected) return false;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      return _hasFramebuffer || _connState == SessionConnState.live;
+    } catch (e) {
+      widget.logger.error('reconnect failed', {'error': '$e'});
+      if (mounted) {
+        setState(() => _lastError = e.toString());
+      }
+      return false;
     }
   }
 
@@ -292,8 +571,6 @@ class _SessionPageState extends State<SessionPage> {
     final vh = box.size.height;
     if (vw <= 0 || vh <= 0) return null;
 
-    // Always aspect-preserving (never stretch). When RemoteResize matched
-    // FB to the view, scale≈1 and offsets≈0.
     final scale = (vw / _fw < vh / _fh) ? vw / _fw : vh / _fh;
     final ox = (vw - _fw * scale) / 2;
     final oy = (vh - _fh * scale) / 2;
@@ -308,48 +585,43 @@ class _SessionPageState extends State<SessionPage> {
   Offset? _lastPointerGlobal;
 
   void _onPointer(Offset global, int buttons) {
-    if (!_grabbed) return;
+    if (!_grabbed || _connState != SessionConnState.live) return;
     _lastPointerGlobal = global;
     _focusNode.requestFocus();
     final xy = _remoteXY(global);
     if (xy == null) return;
     try {
-      _bridge.sendPointer(widget.sessionId, xy.$1, xy.$2, buttons);
+      _bridge.sendPointer(_sessionId, xy.$1, xy.$2, buttons);
     } catch (_) {}
   }
 
-  /// Convert accumulated scroll/pan into RFB wheel button clicks (4–7).
   void _flushWheel(Offset global) {
     const step = 20.0;
-    // Emit discrete press+release clicks (TigerVNC). Prefer last known
-    // pointer if the event position maps outside the FB (letterbox).
     void click(int mask) {
-      final pos = _remoteXY(global) != null
-          ? global
-          : (_lastPointerGlobal ?? global);
+      final pos =
+          _remoteXY(global) != null ? global : (_lastPointerGlobal ?? global);
       _onPointer(pos, mask);
       _onPointer(pos, 0);
     }
 
     while (_scrollAccY <= -step) {
-      click(1 << 3); // button 4 — up
+      click(1 << 3);
       _scrollAccY += step;
     }
     while (_scrollAccY >= step) {
-      click(1 << 4); // button 5 — down
+      click(1 << 4);
       _scrollAccY -= step;
     }
     while (_scrollAccX <= -step) {
-      click(1 << 5); // button 6 — left
+      click(1 << 5);
       _scrollAccX += step;
     }
     while (_scrollAccX >= step) {
-      click(1 << 6); // button 7 — right
+      click(1 << 6);
       _scrollAccX -= step;
     }
   }
 
-  /// Mouse wheel (PointerScrollEvent) still used on some platforms.
   void _onScroll(PointerScrollEvent e) {
     if (!_grabbed) return;
     _scrollAccX -= e.scrollDelta.dx;
@@ -357,7 +629,6 @@ class _SessionPageState extends State<SessionPage> {
     _flushWheel(e.position);
   }
 
-  /// macOS / desktop trackpad two-finger scroll arrives as PanZoom, not Scroll.
   void _onPanZoomUpdate(PointerPanZoomUpdateEvent e) {
     if (!_grabbed) return;
     _scrollAccX -= e.panDelta.dx;
@@ -366,7 +637,9 @@ class _SessionPageState extends State<SessionPage> {
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (!_grabbed) return KeyEventResult.ignored;
+    if (!_grabbed || _connState != SessionConnState.live) {
+      return KeyEventResult.ignored;
+    }
 
     final phys = event.physicalKey.usbHidUsage;
     final down = event is KeyDownEvent || event is KeyRepeatEvent;
@@ -375,7 +648,7 @@ class _SessionPageState extends State<SessionPage> {
       final sym = _downKeysyms.remove(phys);
       if (sym == null) return KeyEventResult.ignored;
       try {
-        _bridge.sendKey(widget.sessionId, false, sym);
+        _bridge.sendKey(_sessionId, false, sym);
       } catch (_) {}
       return KeyEventResult.handled;
     }
@@ -384,7 +657,7 @@ class _SessionPageState extends State<SessionPage> {
       final sym = _downKeysyms[phys];
       if (sym == null) return KeyEventResult.ignored;
       try {
-        _bridge.sendKey(widget.sessionId, true, sym);
+        _bridge.sendKey(_sessionId, true, sym);
       } catch (_) {}
       return KeyEventResult.handled;
     }
@@ -393,38 +666,99 @@ class _SessionPageState extends State<SessionPage> {
     if (sym == null) return KeyEventResult.ignored;
     _downKeysyms[phys] = sym;
     try {
-      _bridge.sendKey(widget.sessionId, true, sym);
+      _bridge.sendKey(_sessionId, true, sym);
     } catch (_) {}
     return KeyEventResult.handled;
   }
 
+  Widget _linkChip() {
+    final hz = _linkStats.hz();
+    final stale = _linkStats.isStale();
+    final Color color = switch (_connState) {
+      SessionConnState.live => stale ? Colors.amber : Colors.greenAccent,
+      SessionConnState.connecting || SessionConnState.reconnecting =>
+        Colors.lightBlueAccent,
+      SessionConnState.timedOut || SessionConnState.disconnected =>
+        Colors.redAccent,
+    };
+    final rate = _connState == SessionConnState.live
+        ? ' · ~${hz.toStringAsFixed(0)} Hz${stale ? ' · stale' : ''}'
+        : '';
+    return Tooltip(
+      message: 'Frame update rate (not network Mbps)',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Center(
+          child: Text(
+            '${_connState.label}$rate',
+            style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _frameChild() {
-    if (_frame == null) {
+    final showBuffer = _connState == SessionConnState.connecting ||
+        _connState == SessionConnState.reconnecting;
+    final tid = _textureId;
+    Widget content;
+    if (tid != null && _fw > 0 && _fh > 0) {
+      content = SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.contain,
+          child: SizedBox(
+            width: _fw.toDouble(),
+            height: _fh.toDouble(),
+            child: Texture(textureId: tid),
+          ),
+        ),
+      );
+    } else if (_frame != null) {
+      content = SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.contain,
+          child: SizedBox(
+            width: _fw.toDouble(),
+            height: _fh.toDouble(),
+            child: RawImage(
+              image: _frame,
+              width: _fw.toDouble(),
+              height: _fh.toDouble(),
+              fit: BoxFit.fill,
+              filterQuality: FilterQuality.low,
+            ),
+          ),
+        ),
+      );
+    } else {
+      content = const SizedBox.expand();
+    }
+
+    if (!showBuffer &&
+        (_connState == SessionConnState.disconnected ||
+            _connState == SessionConnState.timedOut) &&
+        !_hasFramebuffer) {
       return Center(
         child: Text(
-          _lastError ?? 'Waiting for framebuffer…',
+          _lastError ?? _connState.label,
           style: const TextStyle(color: Colors.white70),
         ),
       );
     }
-    final image = RawImage(
-      image: _frame,
-      width: _fw.toDouble(),
-      height: _fh.toDouble(),
-      fit: BoxFit.fill,
-      filterQuality: FilterQuality.low,
-    );
-    // Never stretch the desktop: contain only. Fill window = RemoteResize so
-    // FB eventually matches the view (1:1, no letterbox).
-    return SizedBox.expand(
-      child: FittedBox(
-        fit: BoxFit.contain,
-        child: SizedBox(
-          width: _fw.toDouble(),
-          height: _fh.toDouble(),
-          child: image,
-        ),
-      ),
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        content,
+        if (showBuffer)
+          BufferingOverlay(
+            message: _connState == SessionConnState.reconnecting
+                ? 'Reconnecting… ($_reconnectAttempt/$_maxReconnectAttempts)'
+                : 'Connecting…',
+            detail: _lastError,
+          ),
+      ],
     );
   }
 
@@ -432,7 +766,8 @@ class _SessionPageState extends State<SessionPage> {
   Widget build(BuildContext context) {
     return CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyV, meta: true): _pasteToRemote,
+        const SingleActivator(LogicalKeyboardKey.keyV, meta: true):
+            _pasteToRemote,
         const SingleActivator(LogicalKeyboardKey.keyV, control: true):
             _pasteToRemote,
       },
@@ -440,6 +775,7 @@ class _SessionPageState extends State<SessionPage> {
         appBar: AppBar(
           title: Text(widget.title),
           actions: [
+            _linkChip(),
             IconButton(
               tooltip: 'Paste clipboard to remote',
               onPressed: _pasteToRemote,
@@ -470,17 +806,16 @@ class _SessionPageState extends State<SessionPage> {
                 ),
               ),
             ),
-            if (_lastError != null)
+            if (_lastError != null && _connState != SessionConnState.live)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Center(
                   child: Text(
-                    _lastError!,
+                    _connState.label,
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                       fontSize: 12,
                     ),
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ),
@@ -494,38 +829,45 @@ class _SessionPageState extends State<SessionPage> {
           focusNode: _focusNode,
           autofocus: true,
           onKeyEvent: _onKey,
-          // Hide Mac pointer while grabbed; remote soft-cursor stays in FB pixels.
           child: MouseRegion(
-            cursor: _grabbed
-                ? SystemMouseCursors.none
-                : SystemMouseCursors.basic,
+            cursor: _grabbed ? SystemMouseCursors.none : SystemMouseCursors.basic,
             child: Listener(
-              behavior: HitTestBehavior.opaque,
-              onPointerHover: (e) => _onPointer(e.position, 0),
-              onPointerDown: (e) =>
-                  _onPointer(e.position, e.buttons == 0 ? 1 : e.buttons),
+              onPointerDown: (e) => _onPointer(e.position, e.buttons),
               onPointerMove: (e) => _onPointer(e.position, e.buttons),
               onPointerUp: (e) => _onPointer(e.position, 0),
+              onPointerHover: (e) => _onPointer(e.position, 0),
               onPointerSignal: (e) {
                 if (e is PointerScrollEvent) _onScroll(e);
               },
               onPointerPanZoomUpdate: _onPanZoomUpdate,
               child: ColoredBox(
-                key: _viewKey,
                 color: Colors.black,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    _onViewSize(Size(
-                      constraints.maxWidth,
-                      constraints.maxHeight,
-                    ));
-                    return _frameChild();
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _onViewSize(Size(constraints.maxWidth, constraints.maxHeight));
+                    });
+                    return KeyedSubtree(
+                      key: _viewKey,
+                      child: _frameChild(),
+                    );
                   },
                 ),
               ),
             ),
           ),
         ),
+        bottomNavigationBar: _lastError == null
+            ? null
+            : Material(
+                color: Theme.of(context).colorScheme.errorContainer,
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(_lastError!),
+                  ),
+                ),
+              ),
       ),
     );
   }
