@@ -8,8 +8,10 @@ This site is the **public** docs tree. Local planning notes may live under `plan
 
 ## Channels
 
-| Channel | How |
-|---------|-----|
-| **dev** | Push to `main` / `dev` → prerelease `dev-<sha>` |
-| **rcs** | Tag `vX.Y.Z-rc.N` |
-| **stable** | Tag `vX.Y.Z` via `./scripts/hh-version` |
+| Channel | How | Artifacts |
+|---------|-----|-----------|
+| **dev** | Push to `main` / `dev` → prerelease `dev-<sha>` | portable zip/tar |
+| **rcs** | Tag `vX.Y.Z-rc.N` | zip/tar + `.pkg` / `.deb` / `-setup.exe` |
+| **stable** | Tag `vX.Y.Z` via `./scripts/hh-version` | same as rcs |
+
+Installers are upgradeable (same macOS pkg id / deb name / Inno AppId). Docs site: GitHub Pages from `docs/` (Actions).

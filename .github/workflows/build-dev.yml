@@ -45,6 +45,14 @@ jobs:
         run: |
           chmod +x scripts/*.sh scripts/hh-version
           ./scripts/build_dev.sh
+      - name: Smoke — FFI in portable artifacts
+        shell: bash
+        run: |
+          chmod +x scripts/assert_ffi_in_artifact.sh
+          shopt -s nullglob
+          for f in dist/dev/*.zip dist/dev/*.tar.gz; do
+            ./scripts/assert_ffi_in_artifact.sh "$f"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: helmhost-dev-${{ runner.os }}-${{ github.sha }}
