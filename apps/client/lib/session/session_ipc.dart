@@ -8,7 +8,16 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 const kMethodSessionEnded = 'session_ended';
 const kMethodSessionReplaced = 'session_replaced';
 const kMethodWindowClose = 'window_close';
+/// Close the session Flutter window but keep the native RFB session (attach→tabs).
+const kMethodWindowDismissKeepSession = 'window_dismiss_keep_session';
 
+/// Hooks for the active session window engine (set by [SessionPage]).
+class SessionWindowCommands {
+  SessionWindowCommands._();
+
+  /// Soft-close UI window; leave RFB alive for hub tab reparent.
+  static Future<void> Function()? dismissKeepSession;
+}
 /// Notify the Hub window (non-session). Best-effort; ignores failures.
 Future<void> notifyHub(String method, [Map<String, dynamic>? arguments]) async {
   final hub = await findHubController();

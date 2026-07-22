@@ -112,6 +112,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   bool _hubNotifiedEnd = false;
   bool _sessionTornDown = false;
   bool _windowClosing = false;
+  /// Soft-dismiss window while RFB stays for tab shell.
+  bool _keepSessionOnClose = false;
   bool _reconnectDialogShowing = false;
   bool _pollStoppedForStale = false;
   String? _lastError;
@@ -150,6 +152,9 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _qualityLevel = widget.qualityLevel;
     _compressLevel = widget.compressLevel;
     _bridge = widget.bridge ?? HelmBridge.open();
+    if (widget.closeOnExit) {
+      SessionWindowCommands.dismissKeepSession = _dismissKeepSession;
+    }
     if (widget.active) {
       _startActiveSession();
     }
@@ -341,6 +346,14 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   @override
   void onWindowClose() async {
+    // Soft reparent to tabs: do not disconnect RFB.
+    if (_keepSessionOnClose) {
+      try {
+        await windowManager.setPreventClose(false);
+        await windowManager.close();
+      } catch (_) {}
+      return;
+    }
     // Hub-embedded sessions: hub owns the window close path.
     if (!widget.closeOnExit) return;
     if (_windowClosing) return;
@@ -391,6 +404,43 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     await windowManager.close();
   }
 
+  /// Hub is reparenting this session into a tab — close UI only.
+  Future<void> _dismissKeepSession() async {
+    if (_keepSessionOnClose) {
+      try {
+        await windowManager.setPreventClose(false);
+        await windowManager.close();
+      } catch (_) {}
+      return;
+    }
+    _keepSessionOnClose = true;
+    _sessionTornDown = true;
+    _hubNotifiedEnd = true;
+    _windowClosing = true;
+    widget.logger.info('session window dismiss — keep RFB for tabs', {
+      'sessionId': _sessionId,
+      'host': widget.host,
+      'port': widget.port,
+    });
+    _pollTimer?.cancel();
+    _thumbTimer?.cancel();
+    _resizeDebounce?.cancel();
+    _firstFrameTimer?.cancel();
+    _statsUiTimer?.cancel();
+    _releaseAllKeys();
+    try {
+      _bridge.releaseFocus();
+    } catch (_) {}
+    try {
+      await _fbTex?.dispose();
+    } catch (_) {}
+    _fbTex = null;
+    try {
+      await windowManager.setPreventClose(false);
+      await windowManager.close();
+    } catch (_) {}
+  }
+
   /// Disconnect RFB + notify Hub. Idempotent.
   Future<void> _teardownSession({required String reason}) async {
     if (_sessionTornDown) return;
@@ -439,15 +489,20 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   @override
   void dispose() {
+    if (widget.closeOnExit) {
+      SessionWindowCommands.dismissKeepSession = null;
+    }
     windowManager.removeListener(this);
     if (_embedded) {
       // Tab switch remounts SessionPage — do not end the RFB session.
       _softDisposeEmbedded();
-    } else {
+    } else if (!_keepSessionOnClose) {
       // OS close goes through [onWindowClose]; dispose is a safety net.
       if (!_sessionTornDown) {
         unawaited(_teardownSession(reason: 'disposed'));
       }
+    } else {
+      _softDisposeEmbedded();
     }
     _focusNode.dispose();
     _frame?.dispose();

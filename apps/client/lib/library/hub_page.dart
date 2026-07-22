@@ -218,10 +218,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
       b.hello();
       await b.initRegistry();
       String? thumbsRoot;
-      try {
-        thumbsRoot = (await AppPaths.root()).path;
-      } catch (_) {
-        // Tests / missing path_provider — library still works without thumbs.
+      // Injected bridges (tests) skip path_provider — it can hang without plugins.
+      if (widget.bridge == null) {
+        try {
+          thumbsRoot = (await AppPaths.root()).path;
+        } catch (_) {}
       }
       if (!mounted) return;
       setState(() {
@@ -275,6 +276,62 @@ class _HubPageState extends State<HubPage> with WindowListener {
       } catch (_) {}
     }
     if (changed && mounted) setState(() {});
+  }
+
+  Future<void> _closeSessionWindowKeepAlive(
+    int sessionId, {
+    String? host,
+    int? port,
+  }) async {
+    final wantKey = (host != null && port != null) ? '$host:$port' : null;
+    for (final c in await WindowController.getAll()) {
+      if (c.arguments.isEmpty) continue;
+      try {
+        final a = jsonDecode(c.arguments) as Map<String, dynamic>;
+        if (a['role'] != 'session') continue;
+        final sid = (a['sessionId'] as num?)?.toInt();
+        final title = a['title'] as String? ?? '';
+        final argHost = a['host'] as String?;
+        final argPort = (a['port'] as num?)?.toInt();
+        final argKey = (argHost != null && argPort != null)
+            ? '$argHost:$argPort'
+            : title;
+        final match = sid == sessionId ||
+            (wantKey != null && (argKey == wantKey || title == wantKey));
+        if (!match) continue;
+        try {
+          await c.invokeMethod(kMethodWindowDismissKeepSession);
+        } catch (e) {
+          widget.logger.warn('dismissKeepSession invoke failed', {
+            'sessionId': sessionId,
+            'error': '$e',
+          });
+        }
+        // Multi-window close is unreliable on macOS; always hide as well.
+        try {
+          await c.hide();
+        } catch (e) {
+          widget.logger.warn('session window hide failed', {
+            'sessionId': sessionId,
+            'error': '$e',
+          });
+        }
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _attachSessionsToTabs(Iterable<OpenSessionRef> sessions) async {
+    for (final s in List<OpenSessionRef>.from(sessions)) {
+      if (s.shell != SessionShell.windows &&
+          _sessions.findBySessionId(s.id)?.shell != SessionShell.windows) {
+        // Still try to hide any leftover window UI for this id.
+        await _closeSessionWindowKeepAlive(s.id, host: s.host, port: s.port);
+        _sessions.attachToTabs(s.id);
+        continue;
+      }
+      _sessions.attachToTabs(s.id);
+      await _closeSessionWindowKeepAlive(s.id, host: s.host, port: s.port);
+    }
   }
 
   Future<void> _openSessionWindow(
@@ -431,7 +488,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
     if (existing != null) {
       if (_isNativeSessionAlive(b, existing.id)) {
         b.grab(existing.id);
-        if (existing.shell == SessionShell.tabs || shell == SessionShell.tabs) {
+        final preferTabs = widget.sessionShell == SessionShell.tabs;
+        if (preferTabs || existing.shell == SessionShell.tabs) {
+          if (existing.shell == SessionShell.windows) {
+            await _attachSessionsToTabs([existing]);
+          }
           setState(() {
             _activeTabSessionId = existing.id;
             _libraryOverlayOpen = false;
@@ -1023,20 +1084,24 @@ class _HubPageState extends State<HubPage> with WindowListener {
     );
     widget.onSessionShellChanged(next);
     if (migrate == true) {
-      SessionShellRouter.migrateAll(_sessions, next);
-      setState(() {
-        if (next == SessionShell.tabs) {
+      if (next == SessionShell.tabs) {
+        final windowed = List<OpenSessionRef>.from(_sessions.windowSessions);
+        await _attachSessionsToTabs(windowed);
+        setState(() {
           _libraryOverlayOpen = false;
           _activeTabSessionId = _sessions.tabSessions.isEmpty
               ? null
               : _sessions.tabSessions.first.id;
-        } else {
+          if (_activeTabSessionId != null) {
+            _sessions.applyTabGrabPolicy(activeId: _activeTabSessionId);
+          }
+        });
+      } else {
+        SessionShellRouter.migrateAll(_sessions, next);
+        setState(() {
           _libraryOverlayOpen = true;
           _activeTabSessionId = null;
-        }
-      });
-      // Detach path: open windows for sessions now in windows shell.
-      if (next == SessionShell.windows) {
+        });
         for (final s in _sessions.windowSessions) {
           await _openSessionWindow(
             s.id,

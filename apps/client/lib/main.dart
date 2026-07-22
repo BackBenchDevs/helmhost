@@ -35,6 +35,15 @@ Future<void> main(List<String> args) async {
         case kMethodWindowClose:
           await windowManager.close();
           return null;
+        case kMethodWindowDismissKeepSession:
+          final dismiss = SessionWindowCommands.dismissKeepSession;
+          if (dismiss != null) {
+            await dismiss();
+          } else {
+            await windowManager.setPreventClose(false);
+            await windowManager.close();
+          }
+          return null;
         default:
           throw MissingPluginException(call.method);
       }
