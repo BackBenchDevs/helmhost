@@ -41,6 +41,34 @@ impl FramebufferCache {
         Ok(())
     }
 
+    /// Copy one axis-aligned rect into a tightly packed RGBA8 buffer (`w*h*4`).
+    pub fn copy_rect_to(&self, rect: Rect, out: &mut [u8]) -> Result<(), String> {
+        if rect.x < 0 || rect.y < 0 {
+            return Err("copy_rect_to: negative origin".into());
+        }
+        let x = rect.x as u32;
+        let y = rect.y as u32;
+        if x + rect.w > self.width || y + rect.h > self.height {
+            return Err("copy_rect_to: out of bounds".into());
+        }
+        let need = rect.w as usize * rect.h as usize * 4;
+        if out.len() < need {
+            return Err(format!(
+                "copy_rect_to: buffer short need {need} got {}",
+                out.len()
+            ));
+        }
+        for row in 0..rect.h {
+            let src_off =
+                ((y + row) as usize * self.width as usize + x as usize) * 4;
+            let dst_off = row as usize * rect.w as usize * 4;
+            let len = rect.w as usize * 4;
+            out[dst_off..dst_off + len]
+                .copy_from_slice(&self.pixels[src_off..src_off + len]);
+        }
+        Ok(())
+    }
+
     pub fn put_damage(&mut self, rect: Rect, rgba: &[u8]) -> Result<(), String> {
         let expected = rect.w as usize * rect.h as usize * 4;
         if rgba.len() < expected {
@@ -83,5 +111,57 @@ impl FramebufferCache {
             rgba[dst_off..dst_off + len].copy_from_slice(&self.pixels[src_off..src_off + len]);
         }
         self.put_damage(dst, &rgba)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_rect_to_happy_path() {
+        let mut fb = FramebufferCache::new(4, 3);
+        // Fill with recognizable pattern: pixel (x,y) = [x,y,0,255]
+        for y in 0..3u32 {
+            for x in 0..4u32 {
+                let off = (y as usize * 4 + x as usize) * 4;
+                fb.pixels[off] = x as u8;
+                fb.pixels[off + 1] = y as u8;
+                fb.pixels[off + 2] = 0;
+                fb.pixels[off + 3] = 255;
+            }
+        }
+        let mut out = vec![0u8; 2 * 2 * 4];
+        fb.copy_rect_to(
+            Rect {
+                x: 1,
+                y: 1,
+                w: 2,
+                h: 2,
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(&out[0..4], &[1, 1, 0, 255]);
+        assert_eq!(&out[4..8], &[2, 1, 0, 255]);
+        assert_eq!(&out[8..12], &[1, 2, 0, 255]);
+        assert_eq!(&out[12..16], &[2, 2, 0, 255]);
+    }
+
+    #[test]
+    fn copy_rect_to_oob_rejects() {
+        let fb = FramebufferCache::new(10, 10);
+        let mut out = vec![0u8; 4];
+        assert!(fb
+            .copy_rect_to(
+                Rect {
+                    x: 9,
+                    y: 0,
+                    w: 2,
+                    h: 1,
+                },
+                &mut out,
+            )
+            .is_err());
     }
 }

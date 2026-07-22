@@ -4,14 +4,9 @@ use crate::pixel_format::{raw_to_rgba, PixelFormat};
 use helmhost_core::{KeyEvent, PointerEvent, Rect};
 
 pub use crate::encoding::{
-    encoding_name, preferred_encodings, ENC_COPYRECT, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE,
-    ENC_LAST_RECT, ENC_RAW, ENC_ZRLE,
+    encoding_name, preferred_encodings, ENC_CONTINUOUS_UPDATES, ENC_COPYRECT, ENC_DESKTOP_SIZE,
+    ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT, ENC_RAW, ENC_TIGHT, ENC_ZRLE,
 };
-
-pub const MSG_FRAMEBUFFER_UPDATE: u8 = 0;
-pub const MSG_SET_COLOUR_MAP: u8 = 1;
-pub const MSG_BELL: u8 = 2;
-pub const MSG_SERVER_CUT_TEXT: u8 = 3;
 
 pub const CLIENT_SET_PIXEL_FORMAT: u8 = 0;
 pub const CLIENT_SET_ENCODINGS: u8 = 2;
@@ -19,8 +14,17 @@ pub const CLIENT_FB_UPDATE_REQUEST: u8 = 3;
 pub const CLIENT_KEY_EVENT: u8 = 4;
 pub const CLIENT_POINTER_EVENT: u8 = 5;
 pub const CLIENT_CUT_TEXT: u8 = 6;
+/// TigerVNC Continuous Updates enable/disable (client → server).
+pub const CLIENT_ENABLE_CONTINUOUS_UPDATES: u8 = 150;
 /// TigerVNC / RealVNC client → server SetDesktopSize (ExtendedDesktopSize).
 pub const CLIENT_SET_DESKTOP_SIZE: u8 = 251;
+
+pub const MSG_FRAMEBUFFER_UPDATE: u8 = 0;
+pub const MSG_SET_COLOUR_MAP: u8 = 1;
+pub const MSG_BELL: u8 = 2;
+pub const MSG_SERVER_CUT_TEXT: u8 = 3;
+/// Server → client EndOfContinuousUpdates (type byte only).
+pub const MSG_END_OF_CONTINUOUS_UPDATES: u8 = 150;
 
 pub fn encode_set_encodings(encodings: &[i32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + encodings.len() * 4);
@@ -37,6 +41,24 @@ pub fn encode_fb_update_request(incremental: bool, x: u16, y: u16, w: u16, h: u1
     let mut b = [0u8; 10];
     b[0] = CLIENT_FB_UPDATE_REQUEST;
     b[1] = u8::from(incremental);
+    b[2..4].copy_from_slice(&x.to_be_bytes());
+    b[4..6].copy_from_slice(&y.to_be_bytes());
+    b[6..8].copy_from_slice(&w.to_be_bytes());
+    b[8..10].copy_from_slice(&h.to_be_bytes());
+    b
+}
+
+/// TigerVNC EnableContinuousUpdates (client → server), 10 bytes.
+pub fn encode_enable_continuous_updates(
+    enable: bool,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+) -> [u8; 10] {
+    let mut b = [0u8; 10];
+    b[0] = CLIENT_ENABLE_CONTINUOUS_UPDATES;
+    b[1] = u8::from(enable);
     b[2..4].copy_from_slice(&x.to_be_bytes());
     b[4..6].copy_from_slice(&y.to_be_bytes());
     b[6..8].copy_from_slice(&w.to_be_bytes());
@@ -198,4 +220,20 @@ pub fn parse_copyrect_src(data: &[u8]) -> Result<(u16, u16), String> {
 
 pub fn parse_server_cut_text(payload: &[u8]) -> Result<String, String> {
     String::from_utf8(payload.to_vec()).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod cu_tests {
+    use super::*;
+
+    #[test]
+    fn enable_continuous_updates_layout() {
+        let b = encode_enable_continuous_updates(true, 0, 0, 1920, 1080);
+        assert_eq!(b.len(), 10);
+        assert_eq!(b[0], 150);
+        assert_eq!(b[1], 1);
+        assert_eq!(&b[2..4], &0u16.to_be_bytes());
+        assert_eq!(&b[6..8], &1920u16.to_be_bytes());
+        assert_eq!(&b[8..10], &1080u16.to_be_bytes());
+    }
 }

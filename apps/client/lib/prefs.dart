@@ -7,6 +7,7 @@ const _kThemeMode = 'helmhost.themeMode';
 const _kLibraryViewMode = 'helmhost.libraryViewMode';
 const _kViewScaleMode = 'helmhost.viewScaleMode';
 const _kSessionShell = 'helmhost.sessionShell';
+const _kAutoReconnectOnDrop = 'helmhost.autoReconnectOnDrop';
 
 class AppPrefs {
   AppPrefs._(this._p);
@@ -63,6 +64,14 @@ class AppPrefs {
 
   Future<void> setSessionShell(SessionShell shell) async {
     await _p.setString(_kSessionShell, shell.prefsKey);
+  }
+
+  /// When true, disconnect starts reconnect without a dialog (default off).
+  bool get autoReconnectOnDrop =>
+      _p.getBool(_kAutoReconnectOnDrop) ?? false;
+
+  Future<void> setAutoReconnectOnDrop(bool enabled) async {
+    await _p.setBool(_kAutoReconnectOnDrop, enabled);
   }
 }
 

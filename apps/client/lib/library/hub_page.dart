@@ -20,6 +20,7 @@ import '../thumbs.dart';
 import 'auth_dialog.dart';
 import 'connection_editor.dart';
 import 'library_card_widgets.dart';
+import 'library_status_bar.dart';
 import 'profile_editor.dart';
 import 'tab_session_workspace.dart';
 import 'vnc_address.dart';
@@ -487,6 +488,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
         password: password,
         preferVencrypt: preferVencrypt,
         acceptInvalidCerts: acceptInvalidCerts,
+        bandwidthPreset: BandwidthPresetX.fromPrefs(
+          entry?['bandwidth_preset'] as String?,
+        ).wireCode,
+        qualityLevel: (entry?['quality_level'] as num?)?.toInt(),
+        compressLevel: (entry?['compress_level'] as num?)?.toInt(),
       );
       widget.logger.info('connected', {
         'host': host,
@@ -550,6 +556,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
           port: port,
           shell: shell,
           profileId: profileId,
+          bandwidthPreset: BandwidthPresetX.fromPrefs(
+            upsert['bandwidth_preset'] as String?,
+          ),
+          qualityLevel: (upsert['quality_level'] as num?)?.toInt(),
+          compressLevel: (upsert['compress_level'] as num?)?.toInt(),
         ));
         if (shell == SessionShell.tabs) {
           _activeTabSessionId = id;
@@ -1249,15 +1260,14 @@ class _HubPageState extends State<HubPage> with WindowListener {
             ),
           ),
         Expanded(child: _buildLibraryPane()),
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Text(
-            _error != null ? 'Bridge error' : 'Helmhost · $_hello',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
       ],
     );
+
+    final showLibraryChrome = !useTabs ||
+        _libraryTabSelected ||
+        _sessions.tabSessions.isEmpty;
+    final statusText =
+        _error != null ? 'Bridge error' : 'Helmhost - v · $_hello';
 
     return Scaffold(
       appBar: AppBar(
@@ -1287,57 +1297,28 @@ class _HubPageState extends State<HubPage> with WindowListener {
               onPressed: _connecting ? null : _addressBarConnect,
               child: const Text('Connect'),
             ),
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'New connection',
+              onPressed: _connecting ? null : _showNewEditor,
+              icon: const Icon(Icons.add),
+            ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: widget.sessionShell == SessionShell.tabs
-                ? 'Session shell: Tabs (click for Windows)'
-                : 'Session shell: Windows (click for Tabs)',
-            onPressed: _toggleSessionShell,
-            icon: Icon(
-              widget.sessionShell == SessionShell.tabs
-                  ? Icons.tab
-                  : Icons.open_in_new,
-            ),
-          ),
-          IconButton(
-            tooltip: widget.viewMode == LibraryViewMode.grid
-                ? 'List view'
-                : 'Grid view',
-            onPressed: _toggleViewMode,
-            icon: Icon(
-              widget.viewMode == LibraryViewMode.grid
-                  ? Icons.view_list
-                  : Icons.grid_view,
-            ),
-          ),
-          IconButton(
-            tooltip: 'Theme',
-            onPressed: _cycleTheme,
-            icon: Icon(switch (widget.themeMode) {
-              ThemeMode.light => Icons.light_mode,
-              ThemeMode.dark => Icons.dark_mode,
-              ThemeMode.system => Icons.brightness_auto,
-            }),
-          ),
-          IconButton(
-            tooltip: 'Import',
-            onPressed: _importLibrary,
-            icon: const Icon(Icons.file_download_outlined),
-          ),
-          IconButton(
-            tooltip: 'Export library',
-            onPressed: _exportLibrary,
-            icon: const Icon(Icons.file_upload_outlined),
-          ),
-        ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _connecting ? null : _showNewEditor,
-        tooltip: 'New connection',
-        child: const Icon(Icons.add),
-      ),
+      bottomNavigationBar: showLibraryChrome
+          ? LibraryStatusBar(
+              sessionShell: widget.sessionShell,
+              viewMode: widget.viewMode,
+              themeMode: widget.themeMode,
+              statusText: statusText,
+              onToggleShell: _toggleSessionShell,
+              onToggleView: _toggleViewMode,
+              onCycleTheme: _cycleTheme,
+              onImport: _importLibrary,
+              onExport: _exportLibrary,
+            )
+          : null,
       body: useTabs
           ? TabSessionWorkspace(
               sessions: _sessions.tabSessions,

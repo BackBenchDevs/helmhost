@@ -4,8 +4,8 @@
 #![allow(clippy::missing_safety_doc)]
 
 use helmhost_core::{
-    ConnectionEntry, ConnectionProfile, ConnectionRegistry, Creds, InputFocus, KeyEvent,
-    PointerEvent, SessionCommand, SessionEvent, SessionHandle, SessionId, SessionManager,
+    ConnectTarget, ConnectionEntry, ConnectionProfile, ConnectionRegistry, Creds, InputFocus,
+    KeyEvent, PointerEvent, SessionCommand, SessionEvent, SessionHandle, SessionId, SessionManager,
 };
 use helmhost_rfb::RfbSessionFactory;
 use helmhost_rfb::TlsOptions;
@@ -124,15 +124,14 @@ fn err_cstr(e: impl Into<String>) -> *mut c_char {
 }
 
 /// Free a string returned by this library.
-///
-/// Safety: `s` must be null or a pointer previously returned by this crate
-/// (ownership transfer via [`CString::into_raw`]).
 #[no_mangle]
-pub unsafe extern "C" fn hh_string_free(s: *mut c_char) {
+pub extern "C" fn hh_string_free(s: *mut c_char) {
     if s.is_null() {
         return;
     }
-    drop(CString::from_raw(s));
+    unsafe {
+        drop(CString::from_raw(s));
+    }
 }
 
 #[no_mangle]
@@ -149,6 +148,9 @@ pub extern "C" fn hh_connect(
     password: *const c_char,
     prefer_vencrypt: u8,
     accept_invalid_certs: u8,
+    bandwidth_preset: u8,
+    quality_level: i8,
+    compress_level: i8,
 ) -> *mut c_char {
     init_logging();
     let host = match cstr_to_string(host) {
@@ -177,33 +179,52 @@ pub extern "C" fn hh_connect(
         danger_accept_invalid_certs: accept_invalid_certs != 0,
     };
     let prefer = prefer_vencrypt != 0;
+    let bandwidth = match bandwidth_preset {
+        0 => helmhost_rfb::BandwidthPreset::Lan,
+        2 => helmhost_rfb::BandwidthPreset::Low,
+        _ => helmhost_rfb::BandwidthPreset::Balanced,
+    };
+    let quality = if quality_level < 0 {
+        None
+    } else {
+        Some(i32::from(quality_level).clamp(0, 9))
+    };
+    let compress = if compress_level < 0 {
+        None
+    } else {
+        Some(i32::from(compress_level).clamp(0, 9))
+    };
     tracing::debug!(
         %host,
         port,
         prefer_vencrypt = prefer,
         accept_invalid_certs = accept_invalid_certs != 0,
+        ?bandwidth,
+        ?quality,
+        ?compress,
         "hh_connect start"
     );
 
     let result = RT.block_on(async {
-        let id = {
-            let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
-            state.factory.configure_connect(tls.clone(), prefer);
-            state.manager.alloc_id()
-        };
-        let handle = helmhost_rfb::session::connect_tcp(
-            id,
-            &host,
-            port,
-            Creds { username, password },
-            tls,
-            prefer,
-        )
-        .await?;
-        let session_id = handle.id.0;
         let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
+        state.factory.configure_connect(tls, prefer);
+        state
+            .factory
+            .configure_bandwidth(bandwidth, quality, compress);
+        use helmhost_core::SessionFactory;
+        let handle = state
+            .factory
+            .connect(
+                ConnectTarget {
+                    host: host.clone(),
+                    port,
+                },
+                Creds { username, password },
+            )
+            .await?;
+        let id = handle.id.0;
         state.manager.insert(handle.id, handle.commands.clone());
-        state.sessions.insert(session_id, handle);
+        state.sessions.insert(id, handle);
         let entry_id = format!("{host}:{port}");
         let prev = state.registry.get(&entry_id).cloned();
         let mut entry =
@@ -217,11 +238,18 @@ pub extern "C" fn hh_connect(
                 .unwrap_or(0),
         );
         entry.display_number = helmhost_core::display_from_port(port);
+        entry.bandwidth_preset = match bandwidth {
+            helmhost_rfb::BandwidthPreset::Lan => "lan".into(),
+            helmhost_rfb::BandwidthPreset::Low => "low".into(),
+            helmhost_rfb::BandwidthPreset::Balanced => "balanced".into(),
+        };
+        entry.quality_level = quality;
+        entry.compress_level = compress;
         state.registry.upsert(entry);
         if let Some(path) = state.registry_path.clone() {
             let _ = state.registry.save_to_path(&path);
         }
-        Ok::<_, String>(session_id)
+        Ok::<_, String>(id)
     });
 
     match result {
@@ -305,6 +333,39 @@ pub unsafe extern "C" fn hh_fb_copy(session_id: u64, out: *mut u8, out_len: usiz
     }
 }
 
+/// Copy one RGBA8 rect into `out` (tightly packed `w*h*4`). Returns 0 or -1.
+#[no_mangle]
+pub unsafe extern "C" fn hh_fb_copy_rect(
+    session_id: u64,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    out: *mut u8,
+    out_len: usize,
+) -> c_int {
+    if out.is_null() || out_len == 0 || w == 0 || h == 0 {
+        return -1;
+    }
+    let Ok(state) = STATE.lock() else {
+        return -1;
+    };
+    let Some(handle) = state.sessions.get(&session_id) else {
+        return -1;
+    };
+    let Ok(fb) = handle.framebuffer.lock() else {
+        return -1;
+    };
+    let slice = unsafe { std::slice::from_raw_parts_mut(out, out_len) };
+    match fb.copy_rect_to(
+        helmhost_core::Rect { x, y, w, h },
+        slice,
+    ) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn hh_send_pointer(session_id: u64, x: i32, y: i32, buttons: u8) -> c_int {
     send_cmd_try(
@@ -345,12 +406,9 @@ pub extern "C" fn hh_request_desktop_size(session_id: u64, w: u32, h: u32) -> *m
 #[no_mangle]
 pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
     let result = RT.block_on(async {
-        let handle = {
-            let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
+        let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
+        if let Some(handle) = state.sessions.remove(&session_id) {
             state.manager.remove(SessionId(session_id));
-            state.sessions.remove(&session_id)
-        };
-        if let Some(handle) = handle {
             handle.close().await?;
         }
         Ok::<_, String>(())
@@ -363,19 +421,14 @@ pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
 
 fn send_cmd(session_id: u64, cmd: SessionCommand) -> *mut c_char {
     let result = RT.block_on(async {
-        let tx = {
-            let state = STATE.lock().map_err(|_| "lock".to_string())?;
-            if !state.focus.allows(SessionId(session_id)) {
-                return Err("focus not grabbed".to_string());
-            }
-            let Some(handle) = state.sessions.get(&session_id) else {
-                return Err("unknown session".to_string());
-            };
-            handle.commands.clone()
+        let state = STATE.lock().map_err(|_| "lock".to_string())?;
+        if !state.focus.allows(SessionId(session_id)) {
+            return Err("focus not grabbed".to_string());
+        }
+        let Some(handle) = state.sessions.get(&session_id) else {
+            return Err("unknown session".to_string());
         };
-        tx.send(cmd)
-            .await
-            .map_err(|_| "session command channel closed".to_string())
+        handle.send(cmd).await
     });
     match result {
         Ok(()) => ok_cstr("ok"),
@@ -402,16 +455,11 @@ fn send_cmd_try(session_id: u64, cmd: SessionCommand) -> c_int {
 
 fn send_cmd_unfocused(session_id: u64, cmd: SessionCommand) -> *mut c_char {
     let result = RT.block_on(async {
-        let tx = {
-            let state = STATE.lock().map_err(|_| "lock".to_string())?;
-            let Some(handle) = state.sessions.get(&session_id) else {
-                return Err("unknown session".to_string());
-            };
-            handle.commands.clone()
+        let state = STATE.lock().map_err(|_| "lock".to_string())?;
+        let Some(handle) = state.sessions.get(&session_id) else {
+            return Err("unknown session".to_string());
         };
-        tx.send(cmd)
-            .await
-            .map_err(|_| "session command channel closed".to_string())
+        handle.send(cmd).await
     });
     match result {
         Ok(()) => ok_cstr("ok"),

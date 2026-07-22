@@ -111,6 +111,19 @@ pub struct ConnectionEntry {
     /// When true, do not auto-match domain even if `profile_id` is None.
     #[serde(default)]
     pub profile_none: bool,
+    /// `lan` | `balanced` | `low` (default balanced).
+    #[serde(default = "default_bandwidth_preset")]
+    pub bandwidth_preset: String,
+    /// Optional Tight JPEG quality 0–9.
+    #[serde(default)]
+    pub quality_level: Option<i32>,
+    /// Optional Tight zlib compress 0–9.
+    #[serde(default)]
+    pub compress_level: Option<i32>,
+}
+
+fn default_bandwidth_preset() -> String {
+    "balanced".into()
 }
 
 impl ConnectionEntry {
@@ -131,6 +144,9 @@ impl ConnectionEntry {
             notes: None,
             profile_id: None,
             profile_none: false,
+            bandwidth_preset: default_bandwidth_preset(),
+            quality_level: None,
+            compress_level: None,
         }
     }
 }

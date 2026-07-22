@@ -56,6 +56,9 @@ fn display_name_round_trip() {
         view_only: false,
         notes: None,
         profile_id: None,
+        bandwidth_preset: "balanced".into(),
+        quality_level: None,
+        compress_level: None,
         profile_none: false,
     });
     assert_eq!(
@@ -117,6 +120,9 @@ fn extended_fields_json_round_trip() {
         view_only: false,
         notes: Some("lab box".into()),
         profile_id: Some("p1".into()),
+        bandwidth_preset: "balanced".into(),
+        quality_level: None,
+        compress_level: None,
         profile_none: false,
     });
     let loaded = ConnectionRegistry::from_json(&reg.to_json().unwrap()).unwrap();

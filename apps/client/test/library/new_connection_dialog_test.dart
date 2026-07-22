@@ -100,4 +100,35 @@ void main() {
     expect(result!.connect, isFalse);
     expect(result!.entry['display_name'], 'Renamed');
   });
+  testWidgets('Properties persists default Bandwidth Balanced', (tester) async {
+    ConnectionEditorResult? result;
+    final card = LibraryCard.fromJson({
+      'id': '10.0.0.9:5901',
+      'host': '10.0.0.9',
+      'port': 5901,
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await showPropertiesDialog(
+                  context,
+                  existing: card,
+                  credentials: MemoryCredentialStore(),
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(result!.entry['bandwidth_preset'], 'balanced');
+  });
 }

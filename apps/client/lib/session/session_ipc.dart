@@ -43,3 +43,29 @@ bool isStaleSessionEvent(Map<String, dynamic> ev) {
   }
   return false;
 }
+
+/// Stop the poll loop after this event (dead native id / disconnect).
+bool shouldStopPollingOnEvent(Map<String, dynamic> ev) {
+  if (isStaleSessionEvent(ev)) return true;
+  final type = ev['type'] as String? ?? '';
+  if (type != 'error') return false;
+  final msg = (ev['message'] as String? ?? '').toLowerCase();
+  return msg.contains('unknown session');
+}
+
+/// Prefer not notifying hub for unknown-session from an embedded tab poll.
+bool isUnknownSessionMessage(String msg) =>
+    msg.toLowerCase().contains('unknown session');
+
+/// Whether disconnect should auto-start reconnect without a dialog.
+///
+/// Embedded + unknown session stays dialog-driven so the tab chip is kept.
+bool shouldAutoReconnect({
+  required bool prefEnabled,
+  required bool embedded,
+  required bool unknownSession,
+}) {
+  if (!prefEnabled) return false;
+  if (embedded && unknownSession) return false;
+  return true;
+}

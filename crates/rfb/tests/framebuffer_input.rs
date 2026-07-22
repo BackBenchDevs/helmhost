@@ -79,15 +79,19 @@ fn pointer_and_key_encode() {
 
 #[test]
 fn preferred_encodings_order() {
+    use helmhost_rfb::ENC_CONTINUOUS_UPDATES;
+    use helmhost_rfb::ENC_TIGHT;
     assert_eq!(
         preferred_encodings(),
         [
+            ENC_TIGHT,
             ENC_ZRLE,
             ENC_RAW,
             ENC_COPYRECT,
             ENC_DESKTOP_SIZE,
             ENC_EXTENDED_DESKTOP_SIZE,
-            ENC_LAST_RECT
+            ENC_LAST_RECT,
+            ENC_CONTINUOUS_UPDATES,
         ]
     );
 }
