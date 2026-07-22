@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../session_helpers.dart';
 import 'session_link_stats.dart';
+import 'session_overview.dart';
 
 /// Status chip text for the session strip (unit-testable).
 String sessionStatusChipLabel({
@@ -88,8 +89,6 @@ class SessionStatusBar extends StatelessWidget {
       );
 
   Future<void> _showInsights(BuildContext context) async {
-    final hz = linkStats.hz();
-    final age = linkStats.age();
     final box = context.findRenderObject() as RenderBox?;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
     RelativeRect position = RelativeRect.fill;
@@ -102,30 +101,25 @@ class SessionStatusBar extends StatelessWidget {
         overlay.size.height - origin.dy,
       );
     }
-    final err = (errorText != null && errorText!.isNotEmpty)
-        ? '\nLast error: $errorText'
-        : '';
-    final attempts = connState == SessionConnState.reconnecting
-        ? '\nAttempt: $reconnectAttempt/$maxReconnectAttempts'
-        : '';
+    final body = formatSessionOverviewLines(
+      SessionOverviewData(
+        host: host,
+        port: port,
+        connState: connState,
+        linkStats: linkStats,
+        errorText: errorText,
+        reconnectAttempt: reconnectAttempt,
+        maxReconnectAttempts: maxReconnectAttempts,
+        bandwidthLabel: bandwidthPresetLabel,
+      ),
+    );
     await showMenu<void>(
       context: context,
       position: position,
       items: [
         PopupMenuItem(
           enabled: false,
-          child: Text(
-            '$host:$port',
-            style: Theme.of(context).textTheme.labelLarge,
-          ),
-        ),
-        PopupMenuItem(
-          enabled: false,
-          child: Text(
-            'Update rate: ~${hz.toStringAsFixed(1)} Hz\n'
-            'Last frame age: ${age?.inMilliseconds ?? '—'} ms\n'
-            'State: ${connState.label}$attempts$err',
-          ),
+          child: Text(body, style: Theme.of(context).textTheme.bodySmall),
         ),
       ],
     );

@@ -10,6 +10,7 @@ import 'prefs.dart';
 import 'session/session_ipc.dart';
 import 'session/session_page.dart';
 import 'session_helpers.dart';
+import 'update/app_updater.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -67,6 +68,8 @@ Future<void> main(List<String> args) async {
       prefs: prefs,
     ));
   } else {
+    // Sparkle / WinSparkle scheduled checks (no-op on Linux until user taps).
+    await createAppUpdater().init().catchError((_) {});
     await windowManager.setTitle('Helmhost');
     runApp(HubApp(prefs: prefs));
   }

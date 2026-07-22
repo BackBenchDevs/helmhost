@@ -19,6 +19,25 @@ int? displayFromPort(int port) {
   return null;
 }
 
+/// Short hostname (before first `.`), Title Case each `-` segment.
+///
+/// `grog.bec.example` → `Grog`; `my-lab` → `My-Lab`.
+String displayNameFromHost(String host) {
+  final short = host.trim().split('.').first;
+  if (short.isEmpty) return host.trim();
+  return short.split('-').map((p) {
+    if (p.isEmpty) return p;
+    return '${p[0].toUpperCase()}${p.substring(1).toLowerCase()}';
+  }).join('-');
+}
+
+/// Explicit [displayName] if non-empty; otherwise [displayNameFromHost].
+String effectiveDisplayName({String? displayName, required String host}) {
+  final d = displayName?.trim();
+  if (d != null && d.isNotEmpty) return d;
+  return displayNameFromHost(host);
+}
+
 /// Library card model (from registry JSON).
 class LibraryCard {
   const LibraryCard({
@@ -64,7 +83,7 @@ class LibraryCard {
   final int? compressLevel;
 
   String get title =>
-      (displayName != null && displayName!.isNotEmpty) ? displayName! : id;
+      effectiveDisplayName(displayName: displayName, host: host);
 
   String get subtitle {
     final d = displayNumber ?? displayFromPort(port);
