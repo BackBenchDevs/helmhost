@@ -23,6 +23,7 @@ import 'fb_texture.dart';
 import 'paint_helpers.dart';
 import 'session_ipc.dart';
 import 'session_link_stats.dart';
+import 'session_overview.dart';
 import 'session_shortcuts.dart';
 import 'session_status_bar.dart';
 
@@ -44,6 +45,9 @@ class SessionPage extends StatefulWidget {
     this.bandwidthPreset = BandwidthPreset.balanced,
     this.qualityLevel,
     this.compressLevel,
+    this.onOverviewChanged,
+    this.bridge,
+    this.credentials,
     ILogger? logger,
   }) : logger = logger ?? defaultLogger(module: 'session');
 
@@ -63,6 +67,10 @@ class SessionPage extends StatefulWidget {
   final BandwidthPreset bandwidthPreset;
   final int? qualityLevel;
   final int? compressLevel;
+  final ValueChanged<SessionOverviewData>? onOverviewChanged;
+  /// Injected for tests; production opens native FFI in [initState].
+  final IHelmBridge? bridge;
+  final ICredentialStore? credentials;
   final ILogger logger;
 
   @override
@@ -79,7 +87,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     Duration(seconds: 8),
   ];
 
-  late final HelmBridge _bridge;
+  late final IHelmBridge _bridge;
   late int _sessionId;
   Timer? _pollTimer;
   Timer? _firstFrameTimer;
@@ -112,7 +120,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   String? _sessionPassword;
   String? _sessionUsername;
   final _linkStats = SessionLinkStats();
-  final _creds = createCredentialStore();
+  late final ICredentialStore _creds =
+      widget.credentials ?? createCredentialStore();
   final _viewKey = GlobalKey();
   final _focusNode = FocusNode();
   final _downKeysyms = <int, int>{};
@@ -140,7 +149,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _bandwidthPreset = widget.bandwidthPreset;
     _qualityLevel = widget.qualityLevel;
     _compressLevel = widget.compressLevel;
-    _bridge = HelmBridge.open();
+    _bridge = widget.bridge ?? HelmBridge.open();
     if (widget.active) {
       _startActiveSession();
     }
@@ -218,10 +227,31 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         Timer.periodic(const Duration(seconds: 30), (_) => _captureThumb());
     _statsUiTimer?.cancel();
     _statsUiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && widget.active && _connState == SessionConnState.live) {
+      if (!mounted) return;
+      _notifyOverview();
+      if (widget.active && _connState == SessionConnState.live) {
         setState(() {});
       }
     });
+  }
+
+  void _notifyOverview() {
+    final cb = widget.onOverviewChanged;
+    if (cb == null) return;
+    cb(
+      SessionOverviewData(
+        host: widget.host,
+        port: widget.port,
+        connState: _connState,
+        linkStats: _linkStats,
+        bandwidthLabel: _bandwidthPreset.label,
+        width: _fw > 0 ? _fw : null,
+        height: _fh > 0 ? _fh : null,
+        errorText: _lastError,
+        reconnectAttempt: _reconnectAttempt,
+        maxReconnectAttempts: _maxReconnectAttempts,
+      ),
+    );
   }
 
   Future<void> _pullFramebufferIfReady() async {

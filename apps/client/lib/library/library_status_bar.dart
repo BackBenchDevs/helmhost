@@ -15,6 +15,8 @@ class LibraryStatusBar extends StatelessWidget {
     required this.onCycleTheme,
     required this.onImport,
     required this.onExport,
+    this.onCheckUpdates,
+    this.onUninstall,
   });
 
   final SessionShell sessionShell;
@@ -26,6 +28,8 @@ class LibraryStatusBar extends StatelessWidget {
   final VoidCallback onCycleTheme;
   final VoidCallback onImport;
   final VoidCallback onExport;
+  final VoidCallback? onCheckUpdates;
+  final VoidCallback? onUninstall;
 
   @override
   Widget build(BuildContext context) {
@@ -111,6 +115,26 @@ class LibraryStatusBar extends StatelessWidget {
                 onPressed: onExport,
                 icon: const Icon(Icons.file_upload_outlined),
               ),
+              if (onCheckUpdates != null)
+                IconButton(
+                  tooltip: 'Check for Updates…',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
+                  iconSize: 16,
+                  onPressed: onCheckUpdates,
+                  icon: const Icon(Icons.system_update_alt),
+                ),
+              if (onUninstall != null)
+                IconButton(
+                  tooltip: 'Uninstall Helmhost…',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
+                  iconSize: 16,
+                  onPressed: onUninstall,
+                  icon: const Icon(Icons.delete_outline),
+                ),
               const SizedBox(width: 4),
             ],
           ),

@@ -38,6 +38,9 @@ dependencies:
   shared_preferences: ^2.3.3
   file_picker: ^8.1.7
   image: ^4.5.3
+  auto_updater: ^1.0.0
+  http: ^1.6.0
+  path: ^1.9.1
 
 dev_dependencies:
   flutter_test:

@@ -28,5 +28,10 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Sparkle Ed25519 (EdDSA) public key — verify appcast enclosures -->
+	<key>SUPublicEDKey</key>
+	<string>kmVzNE/tJdDN7db/G8JyR0MfDLHXXtd4PpKNCX9JGuI=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

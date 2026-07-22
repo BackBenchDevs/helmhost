@@ -23,6 +23,7 @@ Future<ProfileEditorResult?> showProfileEditor(
   BuildContext context, {
   ConnectionProfileCard? existing,
   required ICredentialStore credentials,
+  VoidCallback? onAddConnection,
 }) {
   return showDialog<ProfileEditorResult>(
     context: context,
@@ -30,6 +31,7 @@ Future<ProfileEditorResult?> showProfileEditor(
     builder: (ctx) => _ProfileEditorDialog(
       existing: existing,
       credentials: credentials,
+      onAddConnection: onAddConnection,
     ),
   );
 }
@@ -38,10 +40,12 @@ class _ProfileEditorDialog extends StatefulWidget {
   const _ProfileEditorDialog({
     this.existing,
     required this.credentials,
+    this.onAddConnection,
   });
 
   final ConnectionProfileCard? existing;
   final ICredentialStore credentials;
+  final VoidCallback? onAddConnection;
 
   @override
   State<_ProfileEditorDialog> createState() => _ProfileEditorDialogState();
@@ -272,6 +276,12 @@ class _ProfileEditorDialogState extends State<_ProfileEditorDialog> {
         ),
       ),
       actions: [
+        if (widget.existing != null)
+          TextButton(
+            key: const Key('profile-add-connection'),
+            onPressed: widget.onAddConnection,
+            child: const Text('Add connection…'),
+          ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),

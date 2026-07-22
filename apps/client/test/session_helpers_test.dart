@@ -10,6 +10,41 @@ void main() {
     });
   });
 
+  group('displayNameFromHost / effectiveDisplayName', () {
+    test('FQDN and hyphen Title Case', () {
+      expect(displayNameFromHost('grog.bec.broadcom.net'), 'Grog');
+      expect(displayNameFromHost('my-lab'), 'My-Lab');
+      expect(displayNameFromHost('X'), 'X');
+    });
+
+    test('edge hosts', () {
+      expect(displayNameFromHost(''), '');
+      expect(displayNameFromHost('.foo'), '.foo');
+      expect(displayNameFromHost('host.'), 'Host');
+      expect(displayNameFromHost('a--b'), 'A--B');
+    });
+
+    test('explicit override wins', () {
+      expect(
+        effectiveDisplayName(displayName: 'Lab box', host: 'grog.example'),
+        'Lab box',
+      );
+      expect(
+        effectiveDisplayName(displayName: '  ', host: 'grog.example'),
+        'Grog',
+      );
+      expect(
+        effectiveDisplayName(displayName: null, host: 'grog.example'),
+        'Grog',
+      );
+    });
+
+    test('LibraryCard.title uses host when name empty', () {
+      const c = LibraryCard(id: 'grog:5901', host: 'grog.example', port: 5901);
+      expect(c.title, 'Grog');
+    });
+  });
+
   group('display port helpers', () {
     test('portFromDisplay', () {
       expect(portFromDisplay(0), 5900);

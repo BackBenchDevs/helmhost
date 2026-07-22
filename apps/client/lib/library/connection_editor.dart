@@ -19,7 +19,7 @@ class ConnectionEditorResult {
   final bool connect;
 }
 
-/// Profile option for Properties dropdown.
+/// Profile option for Properties / New Connection dropdowns.
 class ProfileChoice {
   const ProfileChoice.auto()
       : id = null,
@@ -40,11 +40,28 @@ class ProfileChoice {
   final String domain;
 }
 
+/// Defaults applied when a named profile is selected in New Connection.
+@visibleForTesting
+Map<String, Object?> applyProfileDefaultsToDraft(ConnectionProfileCard profile) {
+  return {
+    'prefer_vencrypt': profile.preferVencrypt,
+    'accept_invalid_certs': profile.acceptInvalidCerts,
+    'view_only': profile.viewOnly,
+    if (profile.defaultUsername != null && profile.defaultUsername!.isNotEmpty)
+      'username': profile.defaultUsername,
+    if (profile.defaultDisplay != null)
+      'default_display': profile.defaultDisplay,
+  };
+}
+
 /// Minimal RealVNC-style New Connection dialog.
 Future<ConnectionEditorResult?> showNewConnectionDialog(
   BuildContext context, {
   required ICredentialStore credentials,
   List<ProfileChoice> profiles = const [],
+  List<ConnectionProfileCard> profileCards = const [],
+  String? initialProfileId,
+  ConnectionProfileCard? prefillProfile,
 }) {
   return showDialog<ConnectionEditorResult>(
     context: context,
@@ -52,6 +69,9 @@ Future<ConnectionEditorResult?> showNewConnectionDialog(
     builder: (ctx) => _NewConnectionDialog(
       credentials: credentials,
       profiles: profiles,
+      profileCards: profileCards,
+      initialProfileId: initialProfileId,
+      prefillProfile: prefillProfile,
     ),
   );
 }
@@ -106,10 +126,16 @@ class _NewConnectionDialog extends StatefulWidget {
   const _NewConnectionDialog({
     required this.credentials,
     this.profiles = const [],
+    this.profileCards = const [],
+    this.initialProfileId,
+    this.prefillProfile,
   });
 
   final ICredentialStore credentials;
   final List<ProfileChoice> profiles;
+  final List<ConnectionProfileCard> profileCards;
+  final String? initialProfileId;
+  final ConnectionProfileCard? prefillProfile;
 
   @override
   State<_NewConnectionDialog> createState() => _NewConnectionDialogState();
@@ -120,12 +146,53 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
   final _name = TextEditingController();
   var _preferVencrypt = true;
   var _acceptInvalidCerts = false;
+  var _viewOnly = false;
   String? _error;
+  /// null = Auto, '__none__' = None, else profile id.
+  String? _profileKey;
 
   // Carried from Options (Properties) if user opened it.
   Map<String, dynamic>? _extra;
   String? _password;
   var _savePassword = false;
+  String? _username;
+
+  @override
+  void initState() {
+    super.initState();
+    _profileKey = widget.initialProfileId;
+    final prefill = widget.prefillProfile ?? _cardForKey(_profileKey);
+    if (prefill != null) {
+      _applyProfile(prefill);
+    }
+  }
+
+  ConnectionProfileCard? _cardForKey(String? key) {
+    if (key == null || key == '__none__') return null;
+    if (widget.prefillProfile?.id == key) return widget.prefillProfile;
+    for (final c in widget.profileCards) {
+      if (c.id == key) return c;
+    }
+    return null;
+  }
+
+  void _applyProfile(ConnectionProfileCard profile) {
+    final d = applyProfileDefaultsToDraft(profile);
+    _preferVencrypt = d['prefer_vencrypt'] as bool? ?? false;
+    _acceptInvalidCerts = d['accept_invalid_certs'] as bool? ?? false;
+    _viewOnly = d['view_only'] as bool? ?? false;
+    _username = d['username'] as String?;
+  }
+
+  void _onProfileChanged(String? key) {
+    setState(() {
+      _profileKey = key;
+      final card = _cardForKey(key);
+      if (card != null) {
+        _applyProfile(card);
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -141,26 +208,57 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
       return null;
     }
     setState(() => _error = null);
+
+    final profileNone = _profileKey == '__none__';
+    final profileId =
+        (!profileNone && _profileKey != null && _profileKey!.isNotEmpty)
+            ? _profileKey
+            : null;
+    final card = _cardForKey(_profileKey);
+    final domain = card?.domain ?? '';
+
+    var host = parsed.host;
+    if (normalizeDomain(domain).isNotEmpty) {
+      host = shortHost(host, domain);
+      if (host.isEmpty) host = parsed.host;
+    }
+    var port = parsed.port;
+    int? displayNumber = parsed.displayNumber;
+    if (displayNumber == null && card?.defaultDisplay != null) {
+      final def = card!.defaultDisplay!;
+      displayNumber = def;
+      port = portFromDisplay(def);
+    }
+    final connectHost =
+        normalizeDomain(domain).isNotEmpty ? qualifyHost(host, domain) : host;
+
     final base = <String, dynamic>{
-      'id': parsed.sessionId,
-      'host': parsed.host,
-      'port': parsed.port,
-      if (parsed.displayNumber != null) 'display_number': parsed.displayNumber,
-      'display_name':
-          _name.text.trim().isEmpty ? null : _name.text.trim(),
+      'id': sessionKey(connectHost, port),
+      'host': host,
+      'port': port,
+      if (displayNumber != null) 'display_number': displayNumber,
+      'display_name': _name.text.trim().isEmpty
+          ? displayNameFromHost(host)
+          : _name.text.trim(),
       'prefer_vencrypt': _preferVencrypt,
       'accept_invalid_certs': _acceptInvalidCerts,
-      'view_only': false,
+      'view_only': _viewOnly,
       'bandwidth_preset': BandwidthPreset.balanced.prefsKey,
       'tags': <String>[],
+      if (profileId != null) 'profile_id': profileId,
+      'profile_none': profileNone,
+      if (_username != null && _username!.isNotEmpty) 'username': _username,
     };
+
     if (_extra != null) {
       return {
         ..._extra!,
         ...base,
-        'id': parsed.sessionId,
-        'host': parsed.host,
-        'port': parsed.port,
+        'id': base['id'],
+        'host': host,
+        'port': port,
+        if (profileId != null) 'profile_id': profileId,
+        'profile_none': profileNone,
       };
     }
     return base;
@@ -194,9 +292,17 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
       _extra = result.entry;
       _password = result.password;
       _savePassword = result.savePassword;
-      _preferVencrypt = result.entry['prefer_vencrypt'] as bool? ?? _preferVencrypt;
+      _preferVencrypt =
+          result.entry['prefer_vencrypt'] as bool? ?? _preferVencrypt;
       _acceptInvalidCerts =
           result.entry['accept_invalid_certs'] as bool? ?? _acceptInvalidCerts;
+      _viewOnly = result.entry['view_only'] as bool? ?? _viewOnly;
+      _username = result.entry['username'] as String? ?? _username;
+      if (result.entry['profile_none'] == true) {
+        _profileKey = '__none__';
+      } else if (result.entry['profile_id'] != null) {
+        _profileKey = result.entry['profile_id'] as String?;
+      }
       final dn = result.entry['display_name'] as String?;
       if (dn != null) _name.text = dn;
       final host = result.entry['host'] as String? ?? '';
@@ -214,6 +320,18 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final profileItems = <DropdownMenuItem<String?>>[
+      const DropdownMenuItem(value: null, child: Text('Auto')),
+      const DropdownMenuItem(value: '__none__', child: Text('None')),
+      ...widget.profiles.where((p) => p.id != null).map(
+            (p) => DropdownMenuItem(value: p.id, child: Text(p.label)),
+          ),
+    ];
+    final domain = _cardForKey(_profileKey)?.domain;
+    final domainHint = (domain != null && normalizeDomain(domain).isNotEmpty)
+        ? 'Short host qualifies as *.${normalizeDomain(domain)}'
+        : null;
+
     return AlertDialog(
       title: const Text('New Connection'),
       content: SizedBox(
@@ -230,6 +348,7 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
                   labelText: 'VNC Server',
                   hintText: 'host, host:1, or host::5900',
                   errorText: _error,
+                  helperText: domainHint,
                 ),
                 onChanged: (_) => setState(() => _error = null),
                 onSubmitted: (_) => _pop(connect: true),
@@ -241,6 +360,13 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
                   labelText: 'Name',
                   hintText: 'Optional display name',
                 ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String?>(
+                value: _profileKey,
+                decoration: const InputDecoration(labelText: 'Add to profile'),
+                items: profileItems,
+                onChanged: _onProfileChanged,
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<bool>(
@@ -457,8 +583,9 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
       'port': port,
       'display_number': displayFromPort(port) ??
           int.tryParse(_display.text.trim()),
-      'display_name':
-          _name.text.trim().isEmpty ? null : _name.text.trim(),
+      'display_name': _name.text.trim().isEmpty
+          ? displayNameFromHost(host)
+          : _name.text.trim(),
       'username':
           _username.text.trim().isEmpty ? null : _username.text.trim(),
       'prefer_vencrypt': _preferVencrypt,

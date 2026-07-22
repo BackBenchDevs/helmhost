@@ -9,17 +9,24 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../bridge.dart';
+import '../gen/app_version.dart';
 import '../logging/logger.dart';
 import '../prefs.dart';
 import '../session/credentials.dart';
 import '../session/session_ipc.dart';
+import '../session/session_overview.dart';
 import '../session_helpers.dart';
 import '../storage/app_paths.dart';
 import '../storage/credential_store.dart';
 import '../thumbs.dart';
+import '../update/app_uninstall.dart';
+import '../update/app_updater.dart';
 import 'auth_dialog.dart';
+import 'chrome_tab_strip.dart';
+import 'compact_toolbar.dart';
 import 'connection_editor.dart';
 import 'library_card_widgets.dart';
+import 'library_overlay_sidebar.dart';
 import 'library_status_bar.dart';
 import 'profile_editor.dart';
 import 'tab_session_workspace.dart';
@@ -39,6 +46,8 @@ class HubPage extends StatefulWidget {
     required this.sessionShell,
     required this.onSessionShellChanged,
     this.prefs,
+    this.bridge,
+    this.credentials,
     ILogger? logger,
   }) : logger = logger ?? defaultLogger(module: 'hub');
 
@@ -49,6 +58,9 @@ class HubPage extends StatefulWidget {
   final SessionShell sessionShell;
   final ValueChanged<SessionShell> onSessionShellChanged;
   final AppPrefs? prefs;
+  /// Injected for tests; production opens native FFI in [_boot].
+  final IHelmBridge? bridge;
+  final ICredentialStore? credentials;
   final ILogger logger;
 
   @override
@@ -56,10 +68,10 @@ class HubPage extends StatefulWidget {
 }
 
 class _HubPageState extends State<HubPage> with WindowListener {
-  HelmBridge? _bridge;
-  final ICredentialStore _credentials = createCredentialStore();
+  IHelmBridge? _bridge;
+  late final ICredentialStore _credentials =
+      widget.credentials ?? createCredentialStore();
   String? _error;
-  String _hello = '';
   List<LibraryCard> _cards = [];
   List<ConnectionProfileCard> _profiles = [];
   final _search = TextEditingController();
@@ -71,7 +83,8 @@ class _HubPageState extends State<HubPage> with WindowListener {
   String? _searchPatternError;
   String? _profileFilterId; // null = all
   int? _activeTabSessionId;
-  var _libraryTabSelected = true;
+  var _libraryOverlayOpen = true;
+  final _tabOverviews = <int, SessionOverviewData>{};
 
   @override
   void initState() {
@@ -115,7 +128,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       _activeTabSessionId = _sessions.tabSessions.isEmpty
           ? null
           : _sessions.tabSessions.last.id;
-      _libraryTabSelected = _activeTabSessionId == null;
+      _libraryOverlayOpen = _activeTabSessionId == null;
     }
     if (!mounted) return;
     setState(_reloadCards);
@@ -200,17 +213,25 @@ class _HubPageState extends State<HubPage> with WindowListener {
 
   Future<void> _boot() async {
     try {
-      final b = HelmBridge.open();
+      final b = widget.bridge ?? HelmBridge.open();
+      // Smoke the FFI surface; ignore payload (status uses kAppStatusLine).
+      b.hello();
       await b.initRegistry();
-      final root = await AppPaths.root();
+      String? thumbsRoot;
+      try {
+        thumbsRoot = (await AppPaths.root()).path;
+      } catch (_) {
+        // Tests / missing path_provider — library still works without thumbs.
+      }
+      if (!mounted) return;
       setState(() {
         _bridge = b;
-        _hello = b.hello();
-        _thumbsRoot = root.path;
+        _thumbsRoot = thumbsRoot;
         _error = null;
         _reloadCards();
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.toString());
     }
   }
@@ -379,7 +400,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
     );
   }
 
-  bool _isNativeSessionAlive(HelmBridge b, int sessionId) {
+  bool _isNativeSessionAlive(IHelmBridge b, int sessionId) {
     try {
       b.fbSize(sessionId);
       return true;
@@ -413,7 +434,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         if (existing.shell == SessionShell.tabs || shell == SessionShell.tabs) {
           setState(() {
             _activeTabSessionId = existing.id;
-            _libraryTabSelected = false;
+            _libraryOverlayOpen = false;
             _sessions.applyTabGrabPolicy(activeId: existing.id);
           });
         } else {
@@ -465,7 +486,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
   }
 
   Future<void> _connectWithAuth(
-    HelmBridge b,
+    IHelmBridge b,
     String host,
     int port, {
     Map<String, dynamic>? entry,
@@ -517,6 +538,12 @@ class _HubPageState extends State<HubPage> with WindowListener {
           DateTime.now().millisecondsSinceEpoch ~/ 1000;
       if (displayName != null && displayName.isNotEmpty) {
         upsert['display_name'] = displayName;
+      } else {
+        final existing = upsert['display_name'] as String?;
+        upsert['display_name'] = effectiveDisplayName(
+          displayName: existing,
+          host: host,
+        );
       }
       if (persistUsername && username != null && username.isNotEmpty) {
         upsert['username'] = username;
@@ -564,7 +591,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         ));
         if (shell == SessionShell.tabs) {
           _activeTabSessionId = id;
-          _libraryTabSelected = false;
+          _libraryOverlayOpen = false;
           _sessions.applyTabGrabPolicy(activeId: id);
         }
         _reloadCards();
@@ -690,11 +717,23 @@ class _HubPageState extends State<HubPage> with WindowListener {
     }
   }
 
-  Future<void> _showNewEditor() async {
+  Future<void> _showNewEditor({String? initialProfileId}) async {
+    ConnectionProfileCard? prefill;
+    if (initialProfileId != null && initialProfileId != '__none__') {
+      for (final p in _profiles) {
+        if (p.id == initialProfileId) {
+          prefill = p;
+          break;
+        }
+      }
+    }
     final result = await showNewConnectionDialog(
       context,
       credentials: _credentials,
       profiles: _profileChoices(),
+      profileCards: List.unmodifiable(_profiles),
+      initialProfileId: initialProfileId,
+      prefillProfile: prefill,
     );
     if (result != null) await _handleEditorResult(result);
   }
@@ -849,7 +888,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         _activeTabSessionId = _sessions.tabSessions.isEmpty
             ? null
             : _sessions.tabSessions.last.id;
-        _libraryTabSelected = _activeTabSessionId == null;
+        _libraryOverlayOpen = _activeTabSessionId == null;
       }
       _liveThumbs.remove(key);
       _reloadCards();
@@ -861,6 +900,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
       context,
       existing: existing,
       credentials: _credentials,
+      onAddConnection: existing == null
+          ? null
+          : () => unawaited(_showNewEditor(initialProfileId: existing.id)),
     );
     if (result == null) return;
     final json = result.profile.toJson();
@@ -984,12 +1026,12 @@ class _HubPageState extends State<HubPage> with WindowListener {
       SessionShellRouter.migrateAll(_sessions, next);
       setState(() {
         if (next == SessionShell.tabs) {
-          _libraryTabSelected = false;
+          _libraryOverlayOpen = false;
           _activeTabSessionId = _sessions.tabSessions.isEmpty
               ? null
               : _sessions.tabSessions.first.id;
         } else {
-          _libraryTabSelected = true;
+          _libraryOverlayOpen = true;
           _activeTabSessionId = null;
         }
       });
@@ -1017,7 +1059,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         _activeTabSessionId = _sessions.tabSessions.isEmpty
             ? null
             : _sessions.tabSessions.last.id;
-        _libraryTabSelected = _activeTabSessionId == null;
+        _libraryOverlayOpen = _activeTabSessionId == null;
       }
     });
     await _openSessionWindow(
@@ -1084,6 +1126,55 @@ class _HubPageState extends State<HubPage> with WindowListener {
     }
   }
 
+  Future<void> _checkForUpdates() async {
+    try {
+      await createAppUpdater().checkForUpdates();
+      if (!mounted) return;
+      if (!Platform.isMacOS && !Platform.isWindows) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Update installed — restart Helmhost')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    }
+  }
+
+  Future<void> _confirmUninstall() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Uninstall Helmhost?'),
+        content: const Text(
+          'This removes the application. Your library in ~/.helmhost is kept '
+          'unless you delete it yourself.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Uninstall'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await createAppUninstaller().uninstall();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    }
+  }
+
   void _cycleTheme() {
     final next = switch (widget.themeMode) {
       ThemeMode.system => ThemeMode.light,
@@ -1100,65 +1191,108 @@ class _HubPageState extends State<HubPage> with WindowListener {
     widget.onViewModeChanged(next);
   }
 
+  Widget? _addConnectionBanner() {
+    final pid = _profileFilterId;
+    if (pid == null) return null;
+    String name = 'profile';
+    for (final p in _profiles) {
+      if (p.id == pid) {
+        name = p.name;
+        break;
+      }
+    }
+    return ListTile(
+      key: const Key('library-add-connection'),
+      dense: true,
+      leading: const Icon(Icons.add_link, size: 20),
+      title: Text('Add connection to $name…'),
+      onTap: _connecting
+          ? null
+          : () => unawaited(_showNewEditor(initialProfileId: pid)),
+    );
+  }
+
   Widget _buildBody(List<LibraryCard> filtered) {
+    final banner = _addConnectionBanner();
     if (filtered.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.asset(
-              'assets/brand/helmhost-icon-256.png',
-              width: 96,
-              height: 96,
+      return Column(
+        children: [
+          if (banner != null) banner,
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Image.asset(
+                    'assets/brand/helmhost-icon-256.png',
+                    width: 96,
+                    height: 96,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    _cards.isEmpty
+                        ? 'No connections yet.\nType a host above and press Connect, or click +'
+                        : 'No matches',
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
-            Text(
-              _cards.isEmpty
-                  ? 'No connections yet.\nType a host above and press Connect, or click +'
-                  : 'No matches',
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
+          ),
+        ],
       );
     }
     if (widget.viewMode == LibraryViewMode.list) {
-      return ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: filtered.length,
-        itemBuilder: (context, i) {
-          final card = filtered[i];
-          return LibraryListTile(
-            card: card,
-            liveBytes: _liveThumbs[card.id] ??
-                _liveThumbs[sessionKey(card.host, card.port)],
-            thumbsRoot: _thumbsRoot,
-            onTap: () => _connectCard(card),
-            onAction: _cardAction,
-          );
-        },
+      return Column(
+        children: [
+          if (banner != null) banner,
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: filtered.length,
+              itemBuilder: (context, i) {
+                final card = filtered[i];
+                return LibraryListTile(
+                  card: card,
+                  liveBytes: _liveThumbs[card.id] ??
+                      _liveThumbs[sessionKey(card.host, card.port)],
+                  thumbsRoot: _thumbsRoot,
+                  onTap: () => _connectCard(card),
+                  onAction: _cardAction,
+                );
+              },
+            ),
+          ),
+        ],
       );
     }
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 340,
-        mainAxisSpacing: 16,
-        crossAxisSpacing: 16,
-        childAspectRatio: 1.05,
-      ),
-      itemCount: filtered.length,
-      itemBuilder: (context, i) {
-        final card = filtered[i];
-        return LibraryGridCard(
-          card: card,
-          liveBytes: _liveThumbs[card.id] ??
-              _liveThumbs[sessionKey(card.host, card.port)],
-          thumbsRoot: _thumbsRoot,
-          onTap: () => _connectCard(card),
-          onAction: _cardAction,
-        );
-      },
+    return Column(
+      children: [
+        if (banner != null) banner,
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.all(16),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 340,
+              mainAxisSpacing: 16,
+              crossAxisSpacing: 16,
+              childAspectRatio: 1.05,
+            ),
+            itemCount: filtered.length,
+            itemBuilder: (context, i) {
+              final card = filtered[i];
+              return LibraryGridCard(
+                card: card,
+                liveBytes: _liveThumbs[card.id] ??
+                    _liveThumbs[sessionKey(card.host, card.port)],
+                thumbsRoot: _thumbsRoot,
+                onTap: () => _connectCard(card),
+                onAction: _cardAction,
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -1221,8 +1355,15 @@ class _HubPageState extends State<HubPage> with WindowListener {
                       onSelected: (a) async {
                         if (a == 'edit') await _editProfile(p);
                         if (a == 'delete') await _deleteProfile(p);
+                        if (a == 'add') {
+                          await _showNewEditor(initialProfileId: p.id);
+                        }
                       },
                       itemBuilder: (_) => const [
+                        PopupMenuItem(
+                          value: 'add',
+                          child: Text('Add connection…'),
+                        ),
                         PopupMenuItem(value: 'edit', child: Text('Edit…')),
                         PopupMenuItem(value: 'delete', child: Text('Delete…')),
                       ],
@@ -1244,6 +1385,63 @@ class _HubPageState extends State<HubPage> with WindowListener {
     );
   }
 
+  void _setLibraryOverlayOpen(bool open) {
+    setState(() {
+      _libraryOverlayOpen = open;
+      if (open) {
+        _sessions.applyTabGrabPolicy(activeId: null, wantGrab: false);
+        try {
+          _bridge?.releaseFocus();
+        } catch (_) {}
+      } else if (_activeTabSessionId != null) {
+        final id = _activeTabSessionId!;
+        _sessions.applyTabGrabPolicy(activeId: id);
+        try {
+          _bridge?.grab(id);
+        } catch (_) {}
+        final s = _sessions.findBySessionId(id);
+        if (s != null) {
+          _search.text = addressForTab(s.host, s.port);
+        }
+      }
+    });
+    unawaited(_syncWindowTitle());
+  }
+
+  void _selectTab(int id) {
+    setState(() {
+      _libraryOverlayOpen = false;
+      _activeTabSessionId = id;
+      _sessions.applyTabGrabPolicy(activeId: id);
+      final s = _sessions.findBySessionId(id);
+      if (s != null) {
+        _search.text = addressForTab(s.host, s.port);
+      }
+    });
+    try {
+      _bridge?.grab(id);
+    } catch (_) {}
+    unawaited(_syncWindowTitle());
+  }
+
+  Future<void> _syncWindowTitle() async {
+    OpenSessionRef? active;
+    if (_activeTabSessionId != null) {
+      active = _sessions.findBySessionId(_activeTabSessionId!);
+    }
+    final title = (!_libraryOverlayOpen && active != null)
+        ? hubWindowTitle(host: active.host, port: active.port, empty: false)
+        : hubWindowTitle(empty: true);
+    try {
+      await windowManager.setTitle(title);
+    } catch (_) {}
+  }
+
+  void _onTabOverview(int sessionId, SessionOverviewData data) {
+    _tabOverviews[sessionId] = data;
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final useTabs = widget.sessionShell == SessionShell.tabs;
@@ -1263,88 +1461,160 @@ class _HubPageState extends State<HubPage> with WindowListener {
       ],
     );
 
-    final showLibraryChrome = !useTabs ||
-        _libraryTabSelected ||
-        _sessions.tabSessions.isEmpty;
-    final statusText =
-        _error != null ? 'Bridge error' : 'Helmhost - v · $_hello';
+    final tabSessions = _sessions.tabSessions;
+    final overlay = shouldUseLibraryOverlay(
+      sessionCount: tabSessions.length,
+      overlayOpen: _libraryOverlayOpen,
+    );
+    final showLibraryChrome = shouldShowHubLibraryStatusBar(
+      useTabs: useTabs,
+      sessionCount: tabSessions.length,
+    );
+    final statusText = _error != null ? 'Bridge error' : kAppStatusLine;
 
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 8,
-        title: Row(
-          children: [
-            const Text('HelmHost'),
-            const SizedBox(width: 16),
-            Expanded(
-              child: TextField(
-                controller: _search,
-                enabled: !_connecting,
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText: 'VNC address or search…',
-                  errorText: _searchPatternError,
-                  prefixIcon: const Icon(Icons.lan_outlined, size: 20),
-                  border: const OutlineInputBorder(),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                ),
-                onSubmitted: (_) => _addressBarConnect(),
-              ),
+    final libraryStatusBar = LibraryStatusBar(
+      sessionShell: widget.sessionShell,
+      viewMode: widget.viewMode,
+      themeMode: widget.themeMode,
+      statusText: statusText,
+      onToggleShell: _toggleSessionShell,
+      onToggleView: _toggleViewMode,
+      onCycleTheme: _cycleTheme,
+      onImport: _importLibrary,
+      onExport: _exportLibrary,
+      onCheckUpdates: _checkForUpdates,
+      onUninstall: _confirmUninstall,
+    );
+
+    final sessionBody = useTabs
+        ? TabSessionWorkspace(
+            key: const Key('hub-session-stack'),
+            sessions: tabSessions,
+            activeSessionId: _activeTabSessionId,
+            prefs: widget.prefs,
+            paused: overlay,
+            onOverviewChanged: _onTabOverview,
+            bridge: _bridge,
+            credentials: _credentials,
+          )
+        : null;
+
+    Widget body;
+    if (!useTabs) {
+      body = libraryPane;
+    } else if (tabSessions.isEmpty) {
+      body = libraryPane;
+    } else {
+      body = Stack(
+        fit: StackFit.expand,
+        children: [
+          sessionBody!,
+          if (overlay)
+            LibraryOverlaySidebar(
+              onDismiss: () => _setLibraryOverlayOpen(false),
+              bottomBar: libraryStatusBar,
+              child: libraryPane,
             ),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: _connecting ? null : _addressBarConnect,
-              child: const Text('Connect'),
-            ),
-            const SizedBox(width: 4),
-            IconButton(
-              tooltip: 'New connection',
-              onPressed: _connecting ? null : _showNewEditor,
-              icon: const Icon(Icons.add),
-            ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: showLibraryChrome
-          ? LibraryStatusBar(
-              sessionShell: widget.sessionShell,
-              viewMode: widget.viewMode,
-              themeMode: widget.themeMode,
-              statusText: statusText,
-              onToggleShell: _toggleSessionShell,
-              onToggleView: _toggleViewMode,
-              onCycleTheme: _cycleTheme,
-              onImport: _importLibrary,
-              onExport: _exportLibrary,
-            )
-          : null,
+        ],
+      );
+    }
+
+    final scaffold = Scaffold(
+      appBar: null,
+      bottomNavigationBar: showLibraryChrome ? libraryStatusBar : null,
       body: useTabs
-          ? TabSessionWorkspace(
-              sessions: _sessions.tabSessions,
-              activeSessionId: _activeTabSessionId,
-              librarySelected: _libraryTabSelected,
-              libraryChild: libraryPane,
-              prefs: widget.prefs,
-              onLibrarySelected: () => setState(() {
-                _libraryTabSelected = true;
-                _sessions.applyTabGrabPolicy(activeId: null, wantGrab: false);
-              }),
-              onSelect: (id) => setState(() {
-                _libraryTabSelected = false;
-                _activeTabSessionId = id;
-                _sessions.applyTabGrabPolicy(activeId: id);
-                try {
-                  _bridge?.grab(id);
-                } catch (_) {}
-              }),
-              onClose: (id) {
-                final s = _sessions.findBySessionId(id);
-                if (s != null) unawaited(_disconnect(s));
-              },
-              onDetach: (id) => unawaited(_detachTab(id)),
+          ? Column(
+              children: [
+                ChromeTabStrip(
+                  sessions: tabSessions,
+                  activeSessionId: _activeTabSessionId,
+                  libraryOverlayOpen: _libraryOverlayOpen,
+                  overviews: Map.unmodifiable(_tabOverviews),
+                  profiles: [
+                    for (final p in _profiles) (id: p.id, label: p.name),
+                  ],
+                  onToggleLibrary: () {
+                    if (tabSessions.isEmpty) {
+                      _setLibraryOverlayOpen(true);
+                    } else {
+                      _setLibraryOverlayOpen(!_libraryOverlayOpen);
+                    }
+                  },
+                  onSelect: _selectTab,
+                  onClose: (id) {
+                    final s = _sessions.findBySessionId(id);
+                    if (s != null) unawaited(_disconnect(s));
+                  },
+                  onDetach: (id) => unawaited(_detachTab(id)),
+                  onNewConnection: _connecting
+                      ? (_) {}
+                      : (profileId) =>
+                          unawaited(_showNewEditor(initialProfileId: profileId)),
+                ),
+                CompactToolbar(
+                  controller: _search,
+                  enabled: !_connecting,
+                  errorText: _searchPatternError,
+                  onConnect: _addressBarConnect,
+                ),
+                Expanded(child: body),
+              ],
             )
-          : libraryPane,
+          : Column(
+              children: [
+                CompactToolbar(
+                  controller: _search,
+                  enabled: !_connecting,
+                  errorText: _searchPatternError,
+                  onConnect: _addressBarConnect,
+                ),
+                Expanded(child: body),
+              ],
+            ),
+    );
+
+    if (!useTabs) return scaffold;
+
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyL, meta: true, shift: true):
+            () {
+          if (tabSessions.isEmpty) {
+            _setLibraryOverlayOpen(true);
+          } else {
+            _setLibraryOverlayOpen(!_libraryOverlayOpen);
+          }
+        },
+        const SingleActivator(LogicalKeyboardKey.keyL, control: true, shift: true):
+            () {
+          if (tabSessions.isEmpty) {
+            _setLibraryOverlayOpen(true);
+          } else {
+            _setLibraryOverlayOpen(!_libraryOverlayOpen);
+          }
+        },
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (_libraryOverlayOpen && tabSessions.isNotEmpty) {
+            _setLibraryOverlayOpen(false);
+          }
+        },
+        const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () {
+          final id = _activeTabSessionId;
+          if (id == null) return;
+          final s = _sessions.findBySessionId(id);
+          if (s != null) unawaited(_disconnect(s));
+        },
+        const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
+          final id = _activeTabSessionId;
+          if (id == null) return;
+          final s = _sessions.findBySessionId(id);
+          if (s != null) unawaited(_disconnect(s));
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: scaffold,
+      ),
     );
   }
 }
