@@ -79,7 +79,23 @@ Future<void> main(List<String> args) async {
   } else {
     // Sparkle / WinSparkle scheduled checks (no-op on Linux until user taps).
     await createAppUpdater().init().catchError((_) {});
-    await windowManager.setTitle('Helmhost');
+    const defaultSize = Size(1280, 720);
+    const minSize = Size(960, 640);
+    await windowManager.waitUntilReadyToShow(
+      const WindowOptions(
+        size: defaultSize,
+        minimumSize: minSize,
+        center: true,
+        title: 'Helmhost',
+      ),
+      () async {
+        await windowManager.setMinimumSize(minSize);
+        await windowManager.setSize(defaultSize);
+        await windowManager.center();
+        await windowManager.show();
+        await windowManager.focus();
+      },
+    );
     runApp(HubApp(prefs: prefs));
   }
 }
