@@ -5,8 +5,10 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 
 import 'library/vnc_address.dart';
+import 'session/bandwidth_preset.dart';
 
 export 'session/open_session_registry.dart';
+export 'session/bandwidth_preset.dart';
 
 String sessionKey(String host, int port) => '$host:$port';
 
@@ -36,6 +38,9 @@ class LibraryCard {
     this.profileId,
     this.profileNone = false,
     this.openSessionId,
+    this.bandwidthPreset = BandwidthPreset.balanced,
+    this.qualityLevel,
+    this.compressLevel,
   });
 
   final String id;
@@ -54,6 +59,9 @@ class LibraryCard {
   final String? profileId;
   final bool profileNone;
   final int? openSessionId;
+  final BandwidthPreset bandwidthPreset;
+  final int? qualityLevel;
+  final int? compressLevel;
 
   String get title =>
       (displayName != null && displayName!.isNotEmpty) ? displayName! : id;
@@ -88,6 +96,10 @@ class LibraryCard {
       profileId: j['profile_id'] as String?,
       profileNone: j['profile_none'] as bool? ?? false,
       openSessionId: openSessionId,
+      bandwidthPreset:
+          BandwidthPresetX.fromPrefs(j['bandwidth_preset'] as String?),
+      qualityLevel: (j['quality_level'] as num?)?.toInt(),
+      compressLevel: (j['compress_level'] as num?)?.toInt(),
     );
   }
 
@@ -107,6 +119,9 @@ class LibraryCard {
         if (notes != null) 'notes': notes,
         if (profileId != null) 'profile_id': profileId,
         'profile_none': profileNone,
+        'bandwidth_preset': bandwidthPreset.prefsKey,
+        if (qualityLevel != null) 'quality_level': qualityLevel,
+        if (compressLevel != null) 'compress_level': compressLevel,
       };
 
   String get searchHaystack => [

@@ -20,8 +20,11 @@ import '../thumbs.dart';
 import 'buffering_overlay.dart';
 import 'credentials.dart';
 import 'fb_texture.dart';
+import 'paint_helpers.dart';
 import 'session_ipc.dart';
 import 'session_link_stats.dart';
+import 'session_shortcuts.dart';
+import 'session_status_bar.dart';
 
 class SessionPage extends StatefulWidget {
   SessionPage({
@@ -36,7 +39,11 @@ class SessionPage extends StatefulWidget {
     this.preferVencrypt = false,
     this.acceptInvalidCerts = false,
     this.closeOnExit = true,
+    this.active = true,
     this.prefs,
+    this.bandwidthPreset = BandwidthPreset.balanced,
+    this.qualityLevel,
+    this.compressLevel,
     ILogger? logger,
   }) : logger = logger ?? defaultLogger(module: 'session');
 
@@ -50,7 +57,12 @@ class SessionPage extends StatefulWidget {
   final bool preferVencrypt;
   final bool acceptInvalidCerts;
   final bool closeOnExit;
+  /// When false (inactive IndexedStack tab), pause poll/timers.
+  final bool active;
   final AppPrefs? prefs;
+  final BandwidthPreset bandwidthPreset;
+  final int? qualityLevel;
+  final int? compressLevel;
   final ILogger logger;
 
   @override
@@ -81,10 +93,19 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   bool _dirty = false;
   bool _pulling = false;
   bool _paintScheduled = false;
+  DamageRect? _pendingDamage;
+  bool _hadTextureSuccess = false;
+  int _textureFailStreak = 0;
+  int? _pendingPtrX;
+  int? _pendingPtrY;
+  int _pendingPtrButtons = 0;
+  int _lastSentButtons = 0;
+  bool _pointerFlushScheduled = false;
   bool _hubNotifiedEnd = false;
   bool _sessionTornDown = false;
   bool _windowClosing = false;
   bool _reconnectDialogShowing = false;
+  bool _pollStoppedForStale = false;
   String? _lastError;
   SessionConnState _connState = SessionConnState.connecting;
   int _reconnectAttempt = 0;
@@ -95,7 +116,12 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   final _viewKey = GlobalKey();
   final _focusNode = FocusNode();
   final _downKeysyms = <int, int>{};
+  /// Physical keys swallowed for local shortcuts (no RFB key-up).
+  final _swallowedPhys = <int>{};
   late ViewScaleMode _scaleMode;
+  BandwidthPreset _bandwidthPreset = BandwidthPreset.balanced;
+  int? _qualityLevel;
+  int? _compressLevel;
   Timer? _thumbTimer;
   Timer? _resizeDebounce;
   int _lastReqW = 0;
@@ -103,30 +129,110 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   static final bool _paintTrace =
       const bool.fromEnvironment('HELMHOST_PAINT_TRACE', defaultValue: false);
 
+  /// In-hub tab: keep RFB alive across tab switches; no native Texture paint.
+  bool get _embedded => !widget.closeOnExit;
+
   @override
   void initState() {
     super.initState();
     _sessionId = widget.sessionId;
     _scaleMode = widget.prefs?.viewScaleMode ?? ViewScaleMode.fit;
+    _bandwidthPreset = widget.bandwidthPreset;
+    _qualityLevel = widget.qualityLevel;
+    _compressLevel = widget.compressLevel;
     _bridge = HelmBridge.open();
-    _bridge.grab(_sessionId);
-    _pollTimer =
-        Timer.periodic(const Duration(milliseconds: 8), (_) => _pollEvents());
-    _thumbTimer =
-        Timer.periodic(const Duration(seconds: 30), (_) => _captureThumb());
-    _statsUiTimer =
-        Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && _connState == SessionConnState.live) setState(() {});
-    });
-    _armFirstFrameTimeout();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _focusNode.requestFocus();
-    });
-    unawaited(_initTexture());
+    if (widget.active) {
+      _startActiveSession();
+    }
+    if (!_embedded) {
+      unawaited(_initTexture());
+    }
+    windowManager.addListener(this);
     if (widget.closeOnExit) {
-      windowManager.addListener(this);
       unawaited(windowManager.setPreventClose(true));
     }
+  }
+
+  @override
+  void didUpdateWidget(covariant SessionPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessionId != widget.sessionId) {
+      _sessionId = widget.sessionId;
+    }
+    if (oldWidget.active == widget.active) return;
+    if (widget.active) {
+      _resumeActiveSession();
+    } else {
+      _pauseInactiveSession();
+    }
+  }
+
+  void _startActiveSession() {
+    _pollStoppedForStale = false;
+    try {
+      _bridge.grab(_sessionId);
+    } catch (_) {}
+    _ensureTimers();
+    _armFirstFrameTimeout();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && widget.active) {
+        _focusNode.requestFocus();
+        unawaited(_pullFramebufferIfReady());
+      }
+    });
+  }
+
+  void _resumeActiveSession() {
+    if (_pollStoppedForStale ||
+        _connState == SessionConnState.disconnected ||
+        _connState == SessionConnState.timedOut) {
+      // Stay paused until user reconnects.
+      if (mounted) setState(() {});
+      return;
+    }
+    _startActiveSession();
+  }
+
+  void _pauseInactiveSession() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _thumbTimer?.cancel();
+    _thumbTimer = null;
+    _statsUiTimer?.cancel();
+    _statsUiTimer = null;
+    _firstFrameTimer?.cancel();
+    _firstFrameTimer = null;
+    _resizeDebounce?.cancel();
+    _releaseAllKeys();
+    try {
+      _bridge.releaseFocus();
+    } catch (_) {}
+  }
+
+  void _ensureTimers() {
+    _pollTimer?.cancel();
+    _pollTimer =
+        Timer.periodic(const Duration(milliseconds: 8), (_) => _pollEvents());
+    _thumbTimer?.cancel();
+    _thumbTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) => _captureThumb());
+    _statsUiTimer?.cancel();
+    _statsUiTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && widget.active && _connState == SessionConnState.live) {
+        setState(() {});
+      }
+    });
+  }
+
+  Future<void> _pullFramebufferIfReady() async {
+    if (!mounted || !widget.active) return;
+    try {
+      final (w, h) = _bridge.fbSize(_sessionId);
+      if (w <= 0 || h <= 0) return;
+      _fw = w;
+      _fh = h;
+      await _pullFramebuffer();
+    } catch (_) {}
   }
 
   void _armFirstFrameTimeout() {
@@ -156,12 +262,21 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       (_fw > 0 && _fh > 0) && (_textureId != null || _frame != null);
 
   Future<void> _initTexture() async {
+    if (_embedded) return;
     final tex = await FbTextureController.create();
     if (!mounted || tex == null) return;
     setState(() {
       _fbTex = tex;
       _textureId = tex.textureId;
     });
+  }
+
+  /// Stop UI work but leave the native RFB session running (detach edge cases).
+  void _softDisposeEmbedded() {
+    _pauseInactiveSession();
+    unawaited(_fbTex?.dispose() ?? Future<void>.value());
+    _fbTex = null;
+    _textureId = null;
   }
 
   Future<void> _notifyHubEnded({String reason = 'ended'}) async {
@@ -196,6 +311,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   @override
   void onWindowClose() async {
+    // Hub-embedded sessions: hub owns the window close path.
+    if (!widget.closeOnExit) return;
     if (_windowClosing) return;
 
     final skipConfirm = _sessionTornDown ||
@@ -278,13 +395,29 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   }
 
   @override
+  void onWindowBlur() {
+    if (!mounted) return;
+    if (_grabbed) _setGrabbed(false);
+  }
+
+  @override
+  void onWindowFocus() {
+    if (!mounted || !widget.active) return;
+    if (_connState != SessionConnState.live) return;
+    if (!_grabbed) _setGrabbed(true);
+  }
+
+  @override
   void dispose() {
-    if (widget.closeOnExit) {
-      windowManager.removeListener(this);
-    }
-    // OS close goes through [onWindowClose]; dispose is a safety net.
-    if (!_sessionTornDown) {
-      unawaited(_teardownSession(reason: 'disposed'));
+    windowManager.removeListener(this);
+    if (_embedded) {
+      // Tab switch remounts SessionPage — do not end the RFB session.
+      _softDisposeEmbedded();
+    } else {
+      // OS close goes through [onWindowClose]; dispose is a safety net.
+      if (!_sessionTornDown) {
+        unawaited(_teardownSession(reason: 'disposed'));
+      }
     }
     _focusNode.dispose();
     _frame?.dispose();
@@ -298,6 +431,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       } catch (_) {}
     }
     _downKeysyms.clear();
+    _swallowedPhys.clear();
   }
 
   void _setGrabbed(bool grab) {
@@ -305,6 +439,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       _bridge.grab(_sessionId);
       _focusNode.requestFocus();
     } else {
+      _pendingPtrButtons = 0;
+      _flushPointerNow();
       _releaseAllKeys();
       _bridge.releaseFocus();
     }
@@ -372,8 +508,14 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     } catch (_) {}
   }
 
-  void _markDirty() {
+  void _markDirty([DamageRect? rect]) {
     _linkStats.recordFrame();
+    if (rect != null) {
+      _pendingDamage = unionDamage(_pendingDamage, rect);
+    } else {
+      // Full-frame (resize / unknown).
+      _pendingDamage = null;
+    }
     _dirty = true;
     _schedulePaint();
   }
@@ -422,11 +564,24 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _fw = w;
     _fh = h;
 
+    final damage = _pendingDamage;
+    _pendingDamage = null;
+
     final tex = _fbTex;
     if (tex != null) {
-      final presented = await tex.present(_sessionId);
+      final presented = damage == null || damage.isEmpty
+          ? await tex.present(_sessionId)
+          : await tex.present(
+              _sessionId,
+              x: damage.x,
+              y: damage.y,
+              w: damage.w,
+              h: damage.h,
+            );
       if (!mounted) return;
       if (presented) {
+        _hadTextureSuccess = true;
+        _textureFailStreak = 0;
         _onFirstFrameReady();
         if (_textureId != tex.textureId || _frame != null) {
           setState(() {
@@ -442,11 +597,26 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
             'h': h,
             'ms': sw.elapsedMilliseconds,
             'path': 'texture',
+            if (damage != null) 'dmg': '${damage.w}x${damage.h}',
           });
         }
         return;
       }
-      // Soft fail / skipped — fall through to Dart decode path.
+      _textureFailStreak++;
+      final fallback = shouldFallbackToDartDecode(
+        embedded: _embedded,
+        hadTextureSuccess: _hadTextureSuccess,
+        presentOk: false,
+        failStreak: _textureFailStreak,
+      );
+      if (!fallback) {
+        // Soft-skip — retry on next dirty/frame.
+        if (damage != null) {
+          _pendingDamage = unionDamage(_pendingDamage, damage);
+        }
+        _dirty = true;
+        return;
+      }
     }
 
     await _pullFramebufferDecode(w, h, sw);
@@ -486,11 +656,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   }
 
   void _pollEvents() {
-    if (!mounted) return;
-    if (_connState == SessionConnState.timedOut ||
-        _connState == SessionConnState.disconnected) {
-      // Still drain queue so we don't backlog, but ignore for UI.
-    }
+    if (!mounted || !widget.active || _pollStoppedForStale) return;
     try {
       for (var i = 0; i < 64; i++) {
         final ev = _bridge.pollEvent(_sessionId);
@@ -499,9 +665,18 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         if (type == 'desktop_resize') {
           _fw = (ev['w'] as num).toInt();
           _fh = (ev['h'] as num).toInt();
-          _markDirty();
+          _hadTextureSuccess = false; // force full present after resize
+          _markDirty(); // full frame
         } else if (type == 'framebuffer_dirty') {
-          _markDirty();
+          final dx = (ev['x'] as num?)?.toInt();
+          final dy = (ev['y'] as num?)?.toInt();
+          final dw = (ev['w'] as num?)?.toInt();
+          final dh = (ev['h'] as num?)?.toInt();
+          if (dx != null && dy != null && dw != null && dh != null && dw > 0 && dh > 0) {
+            _markDirty(DamageRect(x: dx, y: dy, w: dw, h: dh));
+          } else {
+            _markDirty();
+          }
         } else if (type == 'bell') {
           _onBell();
         } else if (type == 'clipboard') {
@@ -510,11 +685,18 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
           final msg = type == 'error'
               ? (ev['message'] as String? ?? ev.toString())
               : 'Disconnected';
-          widget.logger.warn(type, {
-            'sessionId': _sessionId,
-            'message': msg,
-          });
+          if (shouldStopPollingOnEvent(ev)) {
+            _stopPollingForStale();
+          }
+          // One log line — not every poll tick.
+          if (_connState != SessionConnState.disconnected) {
+            widget.logger.warn(type, {
+              'sessionId': _sessionId,
+              'message': msg,
+            });
+          }
           unawaited(_handleDisconnect(msg));
+          break;
         }
       }
     } catch (e) {
@@ -524,15 +706,42 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     }
   }
 
+  void _stopPollingForStale() {
+    _pollStoppedForStale = true;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _thumbTimer?.cancel();
+    _thumbTimer = null;
+    _statsUiTimer?.cancel();
+    _statsUiTimer = null;
+    _firstFrameTimer?.cancel();
+    _firstFrameTimer = null;
+  }
+
   Future<void> _handleDisconnect(String msg) async {
     if (_connState == SessionConnState.reconnecting) return;
-    await _notifyHubEnded(reason: msg);
+    if (_connState == SessionConnState.disconnected) return;
+
+    final unknown = isUnknownSessionMessage(msg);
+    // Embedded + unknown session: keep hub tab so user can reconnect.
+    if (!(_embedded && unknown)) {
+      await _notifyHubEnded(reason: msg);
+    }
     if (!mounted) return;
     setState(() {
       _connState = SessionConnState.disconnected;
-      _lastError = msg;
+      _lastError = unknown ? 'Session ended' : msg;
     });
-    await _showReconnectDialog(reason: msg);
+    final auto = shouldAutoReconnect(
+      prefEnabled: widget.prefs?.autoReconnectOnDrop ?? false,
+      embedded: _embedded,
+      unknownSession: unknown,
+    );
+    if (auto) {
+      unawaited(_runReconnectLoop());
+    } else {
+      await _showReconnectDialog(reason: _lastError!);
+    }
   }
 
   Future<void> _showReconnectDialog({required String reason}) async {
@@ -563,7 +772,11 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     if (action == 'reconnect') {
       unawaited(_runReconnectLoop());
     } else if (action == 'close') {
-      await windowCloseSelf();
+      if (_embedded) {
+        await _notifyHubEnded(reason: 'user_closed');
+      } else {
+        await windowCloseSelf();
+      }
     }
   }
 
@@ -584,16 +797,15 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   }
 
   Future<void> _runReconnectLoop() async {
+    _pollStoppedForStale = false;
     setState(() {
       _connState = SessionConnState.reconnecting;
       _reconnectAttempt = 0;
       _lastError = null;
-      _fw = 0;
-      _fh = 0;
-      _frame?.dispose();
-      _frame = null;
+      // Keep last frame under BufferingOverlay (no black flash).
       _linkStats.reset();
     });
+    _ensureTimers();
 
     for (var i = 0; i < _maxReconnectAttempts; i++) {
       if (!mounted) return;
@@ -718,6 +930,9 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       password: password,
       preferVencrypt: widget.preferVencrypt,
       acceptInvalidCerts: widget.acceptInvalidCerts,
+      bandwidthPreset: _bandwidthPreset.wireCode,
+      qualityLevel: _qualityLevel,
+      compressLevel: _compressLevel,
     );
     _bridge.grab(newId);
     await _notifyHubReplaced(oldId, newId);
@@ -725,9 +940,11 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     setState(() {
       _sessionId = newId;
       _hubNotifiedEnd = false;
+      _pollStoppedForStale = false;
       _connState = SessionConnState.connecting;
       _lastError = null;
     });
+    _ensureTimers();
     _armFirstFrameTimeout();
 
     final deadline = DateTime.now().add(_reconnectTimeout);
@@ -772,8 +989,37 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _focusNode.requestFocus();
     final xy = _remoteXY(global);
     if (xy == null) return;
+    final immediate = shouldFlushPointerImmediate(
+      buttons: buttons,
+      lastButtons: _lastSentButtons,
+    );
+    _pendingPtrX = xy.$1;
+    _pendingPtrY = xy.$2;
+    _pendingPtrButtons = buttons;
+    if (immediate) {
+      _flushPointerNow();
+      return;
+    }
+    _schedulePointerFlush();
+  }
+
+  void _schedulePointerFlush() {
+    if (_pointerFlushScheduled) return;
+    _pointerFlushScheduled = true;
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      _pointerFlushScheduled = false;
+      _flushPointerNow();
+    });
+    SchedulerBinding.instance.scheduleFrame();
+  }
+
+  void _flushPointerNow() {
+    final x = _pendingPtrX;
+    final y = _pendingPtrY;
+    if (x == null || y == null) return;
     try {
-      _bridge.sendPointer(_sessionId, xy.$1, xy.$2, buttons);
+      _bridge.sendPointer(_sessionId, x, y, _pendingPtrButtons);
+      _lastSentButtons = _pendingPtrButtons;
     } catch (_) {}
   }
 
@@ -827,6 +1073,9 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     final down = event is KeyDownEvent || event is KeyRepeatEvent;
 
     if (!down) {
+      if (_swallowedPhys.remove(phys)) {
+        return KeyEventResult.handled;
+      }
       final sym = _downKeysyms.remove(phys);
       if (sym == null) return KeyEventResult.ignored;
       try {
@@ -835,7 +1084,22 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       return KeyEventResult.handled;
     }
 
+    if (event is KeyDownEvent) {
+      final local = classifySessionLocalKeyEvent(event);
+      if (local != null) {
+        _swallowedPhys.add(phys);
+        if (local == SessionLocalShortcut.pasteToRemote) {
+          unawaited(_pasteToRemote());
+        }
+        // consume (⌘C / ⌘X): remote→local copy is ServerCutText → clipboard
+        return KeyEventResult.handled;
+      }
+    }
+
     if (event is KeyRepeatEvent) {
+      if (_swallowedPhys.contains(phys)) {
+        return KeyEventResult.handled;
+      }
       final sym = _downKeysyms[phys];
       if (sym == null) return KeyEventResult.ignored;
       try {
@@ -851,33 +1115,6 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       _bridge.sendKey(_sessionId, true, sym);
     } catch (_) {}
     return KeyEventResult.handled;
-  }
-
-  Widget _linkChip() {
-    final hz = _linkStats.hz();
-    final stale = _linkStats.isStale();
-    final Color color = switch (_connState) {
-      SessionConnState.live => stale ? Colors.amber : Colors.greenAccent,
-      SessionConnState.connecting || SessionConnState.reconnecting =>
-        Colors.lightBlueAccent,
-      SessionConnState.timedOut || SessionConnState.disconnected =>
-        Colors.redAccent,
-    };
-    final rate = _connState == SessionConnState.live
-        ? ' · ~${hz.toStringAsFixed(0)} Hz${stale ? ' · stale' : ''}'
-        : '';
-    return Tooltip(
-      message: 'Frame update rate (not network Mbps)',
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Center(
-          child: Text(
-            '${_connState.label}$rate',
-            style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-        ),
-      ),
-    );
   }
 
   Widget _frameChild() {
@@ -946,82 +1183,23 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   @override
   Widget build(BuildContext context) {
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyV, meta: true):
-            _pasteToRemote,
-        const SingleActivator(LogicalKeyboardKey.keyV, control: true):
-            _pasteToRemote,
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(widget.title),
-          actions: [
-            _linkChip(),
-            IconButton(
-              tooltip: 'Paste clipboard to remote',
-              onPressed: _pasteToRemote,
-              icon: const Icon(Icons.content_paste),
-            ),
-            PopupMenuButton<ViewScaleMode>(
-              tooltip:
-                  'Fit = letterbox locally. Fill window = resize remote desktop (no stretch).',
-              initialValue: _scaleMode,
-              onSelected: _setScaleMode,
-              itemBuilder: (context) => [
-                for (final m in ViewScaleMode.values)
-                  CheckedPopupMenuItem(
-                    value: m,
-                    checked: m == _scaleMode,
-                    child: Text(m.label),
-                  ),
-              ],
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.aspect_ratio, size: 18),
-                    const SizedBox(width: 4),
-                    Text(_scaleMode.label),
-                    const Icon(Icons.arrow_drop_down, size: 20),
-                  ],
-                ),
-              ),
-            ),
-            if (_lastError != null && _connState != SessionConnState.live)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Center(
-                  child: Text(
-                    _connState.label,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ),
-            TextButton(
-              onPressed: () => _setGrabbed(!_grabbed),
-              child: Text(_grabbed ? 'Release input' : 'Grab input'),
-            ),
-          ],
-        ),
-        body: Focus(
-          focusNode: _focusNode,
-          autofocus: true,
-          onKeyEvent: _onKey,
-          child: MouseRegion(
-            cursor: _grabbed ? SystemMouseCursors.none : SystemMouseCursors.basic,
-            child: Listener(
-              onPointerDown: (e) => _onPointer(e.position, e.buttons),
-              onPointerMove: (e) => _onPointer(e.position, e.buttons),
-              onPointerUp: (e) => _onPointer(e.position, 0),
-              onPointerHover: (e) => _onPointer(e.position, 0),
-              onPointerSignal: (e) {
-                if (e is PointerScrollEvent) _onScroll(e);
-              },
-              onPointerPanZoomUpdate: _onPanZoomUpdate,
+    return Scaffold(
+      appBar: null,
+      body: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: _onKey,
+        child: MouseRegion(
+          cursor: _grabbed ? SystemMouseCursors.none : SystemMouseCursors.basic,
+          child: Listener(
+            onPointerDown: (e) => _onPointer(e.position, e.buttons),
+            onPointerMove: (e) => _onPointer(e.position, e.buttons),
+            onPointerUp: (e) => _onPointer(e.position, 0),
+            onPointerHover: (e) => _onPointer(e.position, 0),
+            onPointerSignal: (e) {
+              if (e is PointerScrollEvent) _onScroll(e);
+            },
+            onPointerPanZoomUpdate: _onPanZoomUpdate,
               child: ColoredBox(
                 color: Colors.black,
                 child: LayoutBuilder(
@@ -1039,18 +1217,38 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
             ),
           ),
         ),
-        bottomNavigationBar: _lastError == null
-            ? null
-            : Material(
-                color: Theme.of(context).colorScheme.errorContainer,
-                child: SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Text(_lastError!),
-                  ),
-                ),
-              ),
-      ),
+        bottomNavigationBar: SessionStatusBar(
+          connState: _connState,
+          linkStats: _linkStats,
+          host: widget.host,
+          port: widget.port,
+          scaleMode: _scaleMode,
+          grabbed: _grabbed,
+          onPaste: _pasteToRemote,
+          onScaleChanged: _setScaleMode,
+          onToggleGrab: () => _setGrabbed(!_grabbed),
+          errorText: _lastError,
+          reconnectAttempt: _reconnectAttempt,
+          maxReconnectAttempts: _maxReconnectAttempts,
+          autoReconnect: widget.prefs?.autoReconnectOnDrop ?? false,
+          onAutoReconnectChanged: widget.prefs == null
+              ? null
+              : (v) async {
+                  await widget.prefs!.setAutoReconnectOnDrop(v);
+                  if (mounted) setState(() {});
+                },
+          bandwidthPresetLabel: _bandwidthPreset.label,
+          bandwidthChoices: [
+            for (final p in BandwidthPreset.values) p.label,
+          ],
+          onBandwidthPreset: (label) {
+            final p = BandwidthPresetX.fromLabel(label);
+            if (p != null) {
+              setState(() => _bandwidthPreset = p);
+              // Applied on next reconnect (live re-advertise may be unavailable).
+            }
+          },
+        ),
     );
   }
 }

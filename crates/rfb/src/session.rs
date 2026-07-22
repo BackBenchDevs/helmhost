@@ -7,17 +7,21 @@ use crate::handshake::{
 };
 use crate::io::{read_exact, write_all};
 use crate::messages::{
-    decode_raw_rect, encode_client_cut_text, encode_fb_update_request, encode_key_event,
-    encode_pointer_event, encode_set_desktop_size, encode_set_encodings, encode_set_pixel_format,
-    parse_copyrect_src, parse_fb_update_header, parse_rect_header, parse_server_cut_text,
-    preferred_encodings, ENC_COPYRECT, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT,
-    ENC_RAW, ENC_ZRLE, MSG_BELL, MSG_FRAMEBUFFER_UPDATE, MSG_SERVER_CUT_TEXT, MSG_SET_COLOUR_MAP,
+    decode_raw_rect, encode_client_cut_text, encode_enable_continuous_updates,
+    encode_fb_update_request, encode_key_event, encode_pointer_event, encode_set_desktop_size,
+    encode_set_encodings, encode_set_pixel_format, parse_copyrect_src, parse_fb_update_header,
+    parse_rect_header, parse_server_cut_text, ENC_COPYRECT, ENC_DESKTOP_SIZE,
+    ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT, ENC_RAW, ENC_ZRLE, MSG_BELL,
+    MSG_END_OF_CONTINUOUS_UPDATES, MSG_FRAMEBUFFER_UPDATE, MSG_SERVER_CUT_TEXT,
+    MSG_SET_COLOUR_MAP,
 };
 use crate::pixel_format::PixelFormat;
+use crate::tight::{read_and_decode_tight, TightStream};
 use crate::vencrypt::{
     negotiate_vencrypt_subtype, wrap_tcp_tls, TlsOptions, VENCRYPT_TLSNONE, VENCRYPT_TLSVNC,
 };
 use crate::zrle::{decode_zrle_with, ZrleStream};
+use crate::encoding::ENC_TIGHT;
 use helmhost_core::{
     Creds, FramebufferCache, Rect, SessionCommand, SessionEvent, SessionHandle, SessionId,
     DEFAULT_QUEUE_CAPACITY,
@@ -32,6 +36,12 @@ struct SharedDesktop {
     height: u16,
     pixel_format: PixelFormat,
     cache: Arc<StdMutex<FramebufferCache>>,
+    /// Server announced EndOfContinuousUpdates.
+    supports_continuous_updates: bool,
+    /// Client has EnableContinuousUpdates(true) outstanding.
+    continuous_updates_enabled: bool,
+    /// Desktop resized while CU was on — re-enable after this FBU.
+    pending_cu_refresh: bool,
 }
 
 impl SharedDesktop {
@@ -44,6 +54,9 @@ impl SharedDesktop {
                 u32::from(width),
                 u32::from(height),
             ))),
+            supports_continuous_updates: false,
+            continuous_updates_enabled: false,
+            pending_cu_refresh: false,
         }
     }
 }
@@ -56,6 +69,7 @@ pub async fn connect_tcp(
     creds: Creds,
     tls: TlsOptions,
     prefer_vencrypt: bool,
+    encodings: &[i32],
 ) -> Result<SessionHandle, String> {
     let addr = format!("{host}:{port}");
     let stream = TcpStream::connect(&addr)
@@ -68,6 +82,7 @@ pub async fn connect_tcp(
         creds.clone(),
         tls.clone(),
         prefer_vencrypt,
+        encodings,
     )
     .await
     {
@@ -76,7 +91,7 @@ pub async fn connect_tcp(
             let stream = TcpStream::connect(&addr)
                 .await
                 .map_err(|re| format!("connect {addr} (fallback): {re}"))?;
-            connect_stream(id, stream, host, creds, tls, false)
+            connect_stream(id, stream, host, creds, tls, false, encodings)
                 .await
                 .map_err(|e2| format!("{e}; classic fallback failed: {e2}"))
         }
@@ -96,15 +111,16 @@ pub async fn connect_stream(
     creds: Creds,
     tls: TlsOptions,
     prefer_vencrypt: bool,
+    encodings: &[i32],
 ) -> Result<SessionHandle, String> {
     let (init, vencrypt) =
         handshake_security_and_init(&mut stream, &creds, prefer_vencrypt).await?;
 
     if vencrypt == Some(SEC_VENCRYPT) {
-        return connect_vencrypt(id, stream, host, creds, tls).await;
+        return connect_vencrypt(id, stream, host, creds, tls, encodings).await;
     }
 
-    spawn_session_tasks(id, stream, init).await
+    spawn_session_tasks(id, stream, init, encodings).await
 }
 
 async fn connect_vencrypt(
@@ -113,6 +129,7 @@ async fn connect_vencrypt(
     host: &str,
     creds: Creds,
     tls: TlsOptions,
+    encodings: &[i32],
 ) -> Result<SessionHandle, String> {
     let have_pw = creds.password.as_ref().is_some_and(|p| !p.is_empty());
     let subtype = negotiate_vencrypt_subtype(&mut stream, have_pw).await?;
@@ -143,7 +160,7 @@ async fn connect_vencrypt(
     }
 
     let init = finish_client_server_init(&mut tls_stream).await?;
-    spawn_session_tasks(id, tls_stream, init).await
+    spawn_session_tasks(id, tls_stream, init, encodings).await
 }
 
 /// Test helper: any AsyncRead+AsyncWrite+Send stream (e.g. duplex / accepted socket).
@@ -151,6 +168,7 @@ pub async fn connect_any<S>(
     id: SessionId,
     mut stream: S,
     creds: &Creds,
+    encodings: &[i32],
 ) -> Result<SessionHandle, String>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -159,13 +177,14 @@ where
     if vencrypt.is_some() {
         return Err("VeNCrypt requires TCP path".into());
     }
-    spawn_session_tasks(id, stream, init).await
+    spawn_session_tasks(id, stream, init, encodings).await
 }
 
 async fn spawn_session_tasks<S>(
     id: SessionId,
     mut stream: S,
     init: ServerInit,
+    encodings: &[i32],
 ) -> Result<SessionHandle, String>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -175,11 +194,11 @@ where
         &encode_set_pixel_format(&PixelFormat::rgb888_le()),
     )
     .await?;
-    write_all(&mut stream, &encode_set_encodings(&preferred_encodings())).await?;
+    write_all(&mut stream, &encode_set_encodings(encodings)).await?;
     tracing::debug!(
         width = init.width,
         height = init.height,
-        encodings = ?preferred_encodings(),
+        encodings = ?encodings,
         "rfb encodings advertised"
     );
 
@@ -255,6 +274,16 @@ async fn writer_loop<W: AsyncWrite + Unpin>(
                 drop(g);
                 write_all(wr, &msg).await
             }
+            SessionCommand::EnableContinuousUpdates {
+                enable,
+                x,
+                y,
+                w,
+                h,
+            } => {
+                let msg = encode_enable_continuous_updates(enable, x, y, w, h);
+                write_all(wr, &msg).await
+            }
             SessionCommand::SetDesktopSize { w, h } => {
                 let width = u16::try_from(w).unwrap_or(u16::MAX);
                 let height = u16::try_from(h).unwrap_or(u16::MAX);
@@ -277,8 +306,9 @@ async fn reader_loop<R: AsyncRead + Unpin>(
     cmd_tx: mpsc::Sender<SessionCommand>,
     state: Arc<Mutex<SharedDesktop>>,
 ) -> Result<(), String> {
-    // RFC 6143: one zlib stream for all ZRLE rectangles on this connection.
+    // RFC 6143: one zlib stream per encoding type, shared across rects.
     let mut zrle = ZrleStream::new();
+    let mut tight = TightStream::new();
     loop {
         let mut typ = [0u8; 1];
         match rd.read_exact(&mut typ).await {
@@ -298,7 +328,7 @@ async fn reader_loop<R: AsyncRead + Unpin>(
                 let mut dirty: Option<Rect> = None;
                 while remaining > 0 {
                     remaining -= 1;
-                    match handle_rect(rd, &ev_tx, &state, &mut zrle).await? {
+                    match handle_rect(rd, &ev_tx, &state, &mut zrle, &mut tight).await? {
                         (RectAction::Continue, Some(r)) => {
                             dirty = Some(match dirty {
                                 Some(d) => d.union(r),
@@ -312,9 +342,49 @@ async fn reader_loop<R: AsyncRead + Unpin>(
                 if let Some(rect) = dirty {
                     send_event(&ev_tx, SessionEvent::FramebufferDirty { rect }).await;
                 }
-                let _ = cmd_tx
-                    .send(SessionCommand::RequestUpdate { incremental: true })
-                    .await;
+                let (need_request, cu_refresh, w, h) = {
+                    let mut g = state.lock().await;
+                    let refresh = g.pending_cu_refresh;
+                    if refresh {
+                        g.pending_cu_refresh = false;
+                        g.continuous_updates_enabled = false;
+                    }
+                    (
+                        !g.continuous_updates_enabled && !refresh,
+                        refresh && g.supports_continuous_updates,
+                        g.width,
+                        g.height,
+                    )
+                };
+                if cu_refresh {
+                    let _ = cmd_tx
+                        .send(SessionCommand::EnableContinuousUpdates {
+                            enable: false,
+                            x: 0,
+                            y: 0,
+                            w,
+                            h,
+                        })
+                        .await;
+                    let _ = cmd_tx
+                        .send(SessionCommand::RequestUpdate { incremental: false })
+                        .await;
+                    let _ = cmd_tx
+                        .send(SessionCommand::EnableContinuousUpdates {
+                            enable: true,
+                            x: 0,
+                            y: 0,
+                            w,
+                            h,
+                        })
+                        .await;
+                    let mut g = state.lock().await;
+                    g.continuous_updates_enabled = true;
+                } else if need_request {
+                    let _ = cmd_tx
+                        .send(SessionCommand::RequestUpdate { incremental: true })
+                        .await;
+                }
             }
             MSG_SET_COLOUR_MAP => {
                 let _pad = read_exact(rd, 1).await?;
@@ -334,6 +404,28 @@ async fn reader_loop<R: AsyncRead + Unpin>(
                 let text = parse_server_cut_text(&payload).unwrap_or_default();
                 send_event(&ev_tx, SessionEvent::Clipboard(text)).await;
             }
+            MSG_END_OF_CONTINUOUS_UPDATES => {
+                // Type byte only. Server supports Continuous Updates.
+                let (w, h) = {
+                    let mut g = state.lock().await;
+                    g.supports_continuous_updates = true;
+                    (g.width, g.height)
+                };
+                let _ = cmd_tx
+                    .send(SessionCommand::EnableContinuousUpdates {
+                        enable: true,
+                        x: 0,
+                        y: 0,
+                        w,
+                        h,
+                    })
+                    .await;
+                {
+                    let mut g = state.lock().await;
+                    g.continuous_updates_enabled = true;
+                }
+                tracing::debug!(w, h, "continuous updates enabled");
+            }
             other => {
                 // Log and stop — unknown types have no safe skip length
                 return Err(format!("unknown server message type {other}"));
@@ -347,6 +439,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
     ev_tx: &mpsc::Sender<SessionEvent>,
     state: &Arc<Mutex<SharedDesktop>>,
     zrle: &mut ZrleStream,
+    tight: &mut TightStream,
 ) -> Result<(RectAction, Option<Rect>), String> {
     let rh = read_exact(rd, 12).await?;
     let (hdr, _) = parse_rect_header(&rh)?;
@@ -434,6 +527,32 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 }
             }
         }
+        ENC_TIGHT => {
+            if hdr.w == 0 || hdr.h == 0 {
+                return Ok((RectAction::Continue, None));
+            }
+            let pf = {
+                let g = state.lock().await;
+                g.pixel_format
+            };
+            let rgba =
+                read_and_decode_tight(rd, tight, &pf, u32::from(hdr.w), u32::from(hdr.h))
+                    .await
+                    .map_err(|e| format!("tight decode failed: {e}"))?;
+            let rect = Rect {
+                x: i32::from(hdr.x),
+                y: i32::from(hdr.y),
+                w: u32::from(hdr.w),
+                h: u32::from(hdr.h),
+            };
+            let g = state.lock().await;
+            g.cache
+                .lock()
+                .map_err(|_| "fb cache lock".to_string())?
+                .put_damage(rect, &rgba)?;
+            drop(g);
+            Ok((RectAction::Continue, Some(rect)))
+        }
         ENC_DESKTOP_SIZE => {
             let mut g = state.lock().await;
             g.width = hdr.w;
@@ -442,6 +561,10 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 .lock()
                 .map_err(|_| "fb cache lock".to_string())?
                 .resize(u32::from(hdr.w), u32::from(hdr.h));
+            if g.supports_continuous_updates {
+                g.pending_cu_refresh = true;
+                g.continuous_updates_enabled = false;
+            }
             let w = u32::from(hdr.w);
             let h = u32::from(hdr.h);
             drop(g);
@@ -468,6 +591,10 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 .lock()
                 .map_err(|_| "fb cache lock".to_string())?
                 .resize(u32::from(hdr.w), u32::from(hdr.h));
+            if g.supports_continuous_updates {
+                g.pending_cu_refresh = true;
+                g.continuous_updates_enabled = false;
+            }
             let w = u32::from(hdr.w);
             let h = u32::from(hdr.h);
             drop(g);
@@ -477,7 +604,6 @@ async fn handle_rect<R: AsyncRead + Unpin>(
         ENC_LAST_RECT => Ok((RectAction::EndFramebufferUpdate, None)),
         other => {
             if hdr.w == 0 || hdr.h == 0 {
-                // Zero-area unknown encoding: no payload to skip
                 Ok((RectAction::Continue, None))
             } else {
                 Err(format!(

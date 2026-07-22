@@ -151,6 +151,7 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
       'prefer_vencrypt': _preferVencrypt,
       'accept_invalid_certs': _acceptInvalidCerts,
       'view_only': false,
+      'bandwidth_preset': BandwidthPreset.balanced.prefsKey,
       'tags': <String>[],
     };
     if (_extra != null) {
@@ -326,6 +327,9 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
   var _acceptInvalidCerts = false;
   var _viewOnly = false;
   var _loaded = false;
+  BandwidthPreset _bandwidthPreset = BandwidthPreset.balanced;
+  int? _qualityLevel;
+  int? _compressLevel;
   /// null = auto, '__none__' = none, else profile id
   String? _profileKey;
 
@@ -363,6 +367,11 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
     _acceptInvalidCerts =
         e?.acceptInvalidCerts ?? d?['accept_invalid_certs'] as bool? ?? false;
     _viewOnly = e?.viewOnly ?? d?['view_only'] as bool? ?? false;
+    _bandwidthPreset = e?.bandwidthPreset ??
+        BandwidthPresetX.fromPrefs(d?['bandwidth_preset'] as String?);
+    _qualityLevel = e?.qualityLevel ?? (d?['quality_level'] as num?)?.toInt();
+    _compressLevel =
+        e?.compressLevel ?? (d?['compress_level'] as num?)?.toInt();
     _savePassword = e != null;
     if (e?.profileNone == true || d?['profile_none'] == true) {
       _profileKey = '__none__';
@@ -455,6 +464,9 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
       'prefer_vencrypt': _preferVencrypt,
       'accept_invalid_certs': _acceptInvalidCerts,
       'view_only': _viewOnly,
+      'bandwidth_preset': _bandwidthPreset.prefsKey,
+      if (_qualityLevel != null) 'quality_level': _qualityLevel,
+      if (_compressLevel != null) 'compress_level': _compressLevel,
       'tags': _tags.text
           .split(',')
           .map((t) => t.trim())
@@ -694,6 +706,62 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
                         onChanged: (v) =>
                             setState(() => _viewOnly = v ?? false),
                       ),
+                      DropdownButtonFormField<BandwidthPreset>(
+                        value: _bandwidthPreset,
+                        decoration:
+                            const InputDecoration(labelText: 'Bandwidth'),
+                        items: [
+                          for (final p in BandwidthPreset.values)
+                            DropdownMenuItem(
+                              value: p,
+                              child: Text(p.label),
+                            ),
+                        ],
+                        onChanged: (v) {
+                          if (v != null) {
+                            setState(() => _bandwidthPreset = v);
+                          }
+                        },
+                      ),
+                      if (_bandwidthPreset == BandwidthPreset.low) ...[
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<int?>(
+                          value: _qualityLevel,
+                          decoration: const InputDecoration(
+                            labelText: 'JPEG quality (Tight)',
+                          ),
+                          items: [
+                            const DropdownMenuItem(
+                              value: null,
+                              child: Text('Default'),
+                            ),
+                            for (var i = 0; i <= 9; i++)
+                              DropdownMenuItem(
+                                value: i,
+                                child: Text('$i'),
+                              ),
+                          ],
+                          onChanged: (v) => setState(() => _qualityLevel = v),
+                        ),
+                        DropdownButtonFormField<int?>(
+                          value: _compressLevel,
+                          decoration: const InputDecoration(
+                            labelText: 'Compress level (Tight)',
+                          ),
+                          items: [
+                            const DropdownMenuItem(
+                              value: null,
+                              child: Text('Default'),
+                            ),
+                            for (var i = 0; i <= 9; i++)
+                              DropdownMenuItem(
+                                value: i,
+                                child: Text('$i'),
+                              ),
+                          ],
+                          onChanged: (v) => setState(() => _compressLevel = v),
+                        ),
+                      ],
                     ],
                   ),
                   Padding(

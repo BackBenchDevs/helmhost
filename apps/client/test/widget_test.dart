@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:helmhost/library/auth_dialog.dart';
+import 'package:helmhost/library/library_status_bar.dart';
 import 'package:helmhost/main.dart';
 import 'package:helmhost/prefs.dart';
 import 'package:helmhost/session_helpers.dart';
@@ -18,7 +19,8 @@ void main() {
     expect(find.text('HelmHost'), findsOneWidget);
     expect(find.text('Connect'), findsOneWidget);
     expect(find.textContaining('No connections yet'), findsOneWidget);
-    expect(find.byType(FloatingActionButton), findsOneWidget);
+    expect(find.byTooltip('New connection'), findsOneWidget);
+    expect(find.byType(FloatingActionButton), findsNothing);
   });
 
   testWidgets('Hub pumps with dark theme', (tester) async {
@@ -30,13 +32,21 @@ void main() {
     expect(app.themeMode, ThemeMode.dark);
   });
 
-  testWidgets('List view mode toggle', (tester) async {
+  testWidgets('Library chrome controls live in status bar not AppBar',
+      (tester) async {
     SharedPreferences.setMockInitialValues({'helmhost.libraryViewMode': 'list'});
     final prefs = await AppPrefs.open();
     await tester.pumpWidget(HubApp(prefs: prefs));
     await tester.pump();
-    expect(find.byIcon(Icons.view_list), findsNothing);
+    // Grid toggle icon is in LibraryStatusBar (list mode → show grid icon).
     expect(find.byIcon(Icons.grid_view), findsOneWidget);
+    expect(find.byTooltip('Theme'), findsOneWidget);
+    expect(find.byTooltip('Import'), findsOneWidget);
+    expect(find.byTooltip('Export library'), findsOneWidget);
+    expect(find.byType(LibraryStatusBar), findsOneWidget);
+    // AppBar keeps Connect / New only — no shell/theme cluster in actions.
+    final appBar = tester.widget<AppBar>(find.byType(AppBar));
+    expect(appBar.actions, isNull);
   });
 
   testWidgets('AuthDialog shows username when needed', (tester) async {

@@ -92,6 +92,14 @@ pub enum SessionCommand {
     RequestUpdate {
         incremental: bool,
     },
+    /// TigerVNC EnableContinuousUpdates (client → server).
+    EnableContinuousUpdates {
+        enable: bool,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+    },
     /// TigerVNC RemoteResize: request remote FB = w×h (ExtendedDesktopSize).
     SetDesktopSize {
         w: u32,

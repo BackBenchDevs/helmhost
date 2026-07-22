@@ -9,6 +9,7 @@ use helmhost_rfb::messages::{
     CLIENT_SET_ENCODINGS, CLIENT_SET_PIXEL_FORMAT, ENC_RAW, MSG_FRAMEBUFFER_UPDATE,
 };
 use helmhost_rfb::pixel_format::PixelFormat;
+use helmhost_rfb::encoding::preferred_encodings;
 use helmhost_rfb::session::connect_any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -82,10 +83,11 @@ async fn two_concurrent_mock_sessions() {
     tokio::spawn(async move { mock_peer_half(s1).await });
     tokio::spawn(async move { mock_peer_half(s2).await });
 
-    let mut h1 = connect_any(SessionId(1), c1, &Creds::default())
+    let encs = preferred_encodings();
+    let mut h1 = connect_any(SessionId(1), c1, &Creds::default(), &encs)
         .await
         .unwrap();
-    let mut h2 = connect_any(SessionId(2), c2, &Creds::default())
+    let mut h2 = connect_any(SessionId(2), c2, &Creds::default(), &encs)
         .await
         .unwrap();
 
@@ -130,7 +132,7 @@ fn helm_runtime_hosts_two_tasks() {
 async fn close_stops_accepting_commands() {
     let (client, server) = duplex(4096);
     tokio::spawn(async move { mock_peer_half(server).await });
-    let mut handle = connect_any(SessionId(9), client, &Creds::default())
+    let mut handle = connect_any(SessionId(9), client, &Creds::default(), &preferred_encodings())
         .await
         .unwrap();
     assert!(wait_damage(&mut handle).await);

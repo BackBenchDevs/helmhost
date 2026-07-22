@@ -1,3 +1,5 @@
+import 'bandwidth_preset.dart';
+
 /// Which UI shell hosts a live session.
 enum SessionShell { windows, tabs }
 
@@ -24,6 +26,9 @@ class OpenSessionRef {
     this.windowId,
     this.grabbed = true,
     this.profileId,
+    this.bandwidthPreset = BandwidthPreset.balanced,
+    this.qualityLevel,
+    this.compressLevel,
   });
 
   final int id;
@@ -33,6 +38,9 @@ class OpenSessionRef {
   final int? windowId;
   final bool grabbed;
   final String? profileId;
+  final BandwidthPreset bandwidthPreset;
+  final int? qualityLevel;
+  final int? compressLevel;
 
   String get key => '$host:$port';
 
@@ -44,6 +52,9 @@ class OpenSessionRef {
     int? windowId,
     bool? grabbed,
     String? profileId,
+    BandwidthPreset? bandwidthPreset,
+    int? qualityLevel,
+    int? compressLevel,
     bool clearWindowId = false,
   }) {
     return OpenSessionRef(
@@ -54,6 +65,9 @@ class OpenSessionRef {
       windowId: clearWindowId ? null : (windowId ?? this.windowId),
       grabbed: grabbed ?? this.grabbed,
       profileId: profileId ?? this.profileId,
+      bandwidthPreset: bandwidthPreset ?? this.bandwidthPreset,
+      qualityLevel: qualityLevel ?? this.qualityLevel,
+      compressLevel: compressLevel ?? this.compressLevel,
     );
   }
 }

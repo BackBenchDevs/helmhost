@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:helmhost/keysyms.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('charToKeysym', () {
     test('ascii printable', () {
       expect(charToKeysym('a'), 0x0061);
@@ -22,9 +24,9 @@ void main() {
   });
 
   group('logicalKeyToKeysym', () {
-    test('modifiers L/R', () {
-      expect(logicalKeyToKeysym(LogicalKeyboardKey.controlLeft), 0xffe3);
-      expect(logicalKeyToKeysym(LogicalKeyboardKey.controlRight), 0xffe4);
+    test('modifiers L/R — Cmd is Super, not Control', () {
+      expect(logicalKeyToKeysym(LogicalKeyboardKey.controlLeft), xkControlL);
+      expect(logicalKeyToKeysym(LogicalKeyboardKey.controlRight), xkControlR);
       expect(logicalKeyToKeysym(LogicalKeyboardKey.shiftLeft), 0xffe1);
       expect(logicalKeyToKeysym(LogicalKeyboardKey.shiftRight), 0xffe2);
       expect(logicalKeyToKeysym(LogicalKeyboardKey.altLeft), 0xffe9);
@@ -81,7 +83,16 @@ void main() {
         logicalKey: LogicalKeyboardKey.controlLeft,
         timeStamp: Duration.zero,
       );
-      expect(keysymForKeyEvent(ev), 0xffe3);
+      expect(keysymForKeyEvent(ev), xkControlL);
+    });
+
+    test('meta left is Super', () {
+      final ev = KeyDownEvent(
+        physicalKey: PhysicalKeyboardKey.metaLeft,
+        logicalKey: LogicalKeyboardKey.metaLeft,
+        timeStamp: Duration.zero,
+      );
+      expect(keysymForKeyEvent(ev), 0xffeb);
     });
 
     test('escape prefers table over character', () {

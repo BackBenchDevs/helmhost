@@ -1,10 +1,21 @@
 import 'package:flutter/material.dart';
 
+import '../prefs.dart';
 import '../session/session_page.dart';
 import '../session_helpers.dart';
-import '../prefs.dart';
+
+/// Index into [sessions] for [IndexedStack]; 0 if missing.
+@visibleForTesting
+int tabStackIndex(List<OpenSessionRef> sessions, int? activeSessionId) {
+  if (activeSessionId == null || sessions.isEmpty) return 0;
+  final i = sessions.indexWhere((s) => s.id == activeSessionId);
+  return i < 0 ? 0 : i;
+}
 
 /// Browser-like tab strip hosting in-process session views.
+///
+/// All open session tabs keep a live [SessionPage] under an [IndexedStack]
+/// so switching tabs does not dispose State / framebuffer.
 class TabSessionWorkspace extends StatelessWidget {
   const TabSessionWorkspace({
     super.key,
@@ -33,6 +44,7 @@ class TabSessionWorkspace extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final stackIndex = tabStackIndex(sessions, activeSessionId);
     return Column(
       children: [
         Material(
@@ -60,12 +72,46 @@ class TabSessionWorkspace extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: librarySelected || activeSessionId == null
+          child: sessions.isEmpty
               ? (libraryChild ?? const SizedBox.shrink())
-              : _ActiveSession(
-                  key: ValueKey(activeSessionId),
-                  ref: sessions.firstWhere((s) => s.id == activeSessionId),
-                  prefs: prefs,
+              : Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Keep all SessionPages mounted across Library ↔ session switches.
+                    Offstage(
+                      offstage: librarySelected,
+                      child: TickerMode(
+                        enabled: !librarySelected,
+                        child: IndexedStack(
+                          index: stackIndex,
+                          sizing: StackFit.expand,
+                          children: [
+                            for (final s in sessions)
+                              SessionPage(
+                                key: ValueKey('tab-session-${s.id}'),
+                                sessionId: s.id,
+                                title: s.key,
+                                host: s.host,
+                                port: s.port,
+                                entryId: s.key,
+                                profileId: s.profileId,
+                                closeOnExit: false,
+                                active: !librarySelected &&
+                                    s.id == activeSessionId,
+                                prefs: prefs,
+                                bandwidthPreset: s.bandwidthPreset,
+                                qualityLevel: s.qualityLevel,
+                                compressLevel: s.compressLevel,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (librarySelected)
+                      Positioned.fill(
+                        child: libraryChild ?? const SizedBox.shrink(),
+                      ),
+                  ],
                 ),
         ),
       ],
@@ -119,31 +165,6 @@ class _TabChip extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _ActiveSession extends StatelessWidget {
-  const _ActiveSession({
-    super.key,
-    required this.ref,
-    this.prefs,
-  });
-
-  final OpenSessionRef ref;
-  final AppPrefs? prefs;
-
-  @override
-  Widget build(BuildContext context) {
-    return SessionPage(
-      sessionId: ref.id,
-      title: ref.key,
-      host: ref.host,
-      port: ref.port,
-      entryId: ref.key,
-      profileId: ref.profileId,
-      closeOnExit: false,
-      prefs: prefs,
     );
   }
 }

@@ -11,9 +11,17 @@ typedef _HelloDart = Pointer<Utf8> Function();
 typedef _FreeNative = Void Function(Pointer<Utf8>);
 typedef _FreeDart = void Function(Pointer<Utf8>);
 typedef _ConnectNative = Pointer<Utf8> Function(
-    Pointer<Utf8>, Uint16, Pointer<Utf8>, Pointer<Utf8>, Uint8, Uint8);
+    Pointer<Utf8>,
+    Uint16,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Uint8,
+    Uint8,
+    Uint8,
+    Int8,
+    Int8);
 typedef _ConnectDart = Pointer<Utf8> Function(
-    Pointer<Utf8>, int, Pointer<Utf8>, Pointer<Utf8>, int, int);
+    Pointer<Utf8>, int, Pointer<Utf8>, Pointer<Utf8>, int, int, int, int, int);
 typedef _PollNative = Pointer<Utf8> Function(Uint64);
 typedef _PollDart = Pointer<Utf8> Function(int);
 typedef _PtrNative = Int32 Function(Uint64, Int32, Int32, Uint8);
@@ -181,6 +189,9 @@ class HelmBridge {
     String? password,
     bool preferVencrypt = false,
     bool acceptInvalidCerts = false,
+    int bandwidthPreset = 1,
+    int? qualityLevel,
+    int? compressLevel,
   }) {
     final h = host.toNativeUtf8();
     final u = (username ?? '').toNativeUtf8();
@@ -193,6 +204,9 @@ class HelmBridge {
         p,
         preferVencrypt ? 1 : 0,
         acceptInvalidCerts ? 1 : 0,
+        bandwidthPreset.clamp(0, 2),
+        qualityLevel == null ? -1 : qualityLevel.clamp(0, 9),
+        compressLevel == null ? -1 : compressLevel.clamp(0, 9),
       ));
       if (r.startsWith('ERR:')) throw StateError(r.substring(4));
       return int.parse(r);

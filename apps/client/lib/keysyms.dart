@@ -1,5 +1,8 @@
 import 'package:flutter/services.dart';
 
+const int xkControlL = 0xffe3;
+const int xkControlR = 0xffe4;
+
 /// X11 keysym for a printable Unicode character (Latin-1 or Unicode plane).
 int charToKeysym(String ch) {
   if (ch.isEmpty) return 0;
@@ -10,16 +13,19 @@ int charToKeysym(String ch) {
 }
 
 /// Map a Flutter [LogicalKeyboardKey] to an X11 keysym (no character).
+///
+/// macOS Cmd → Super (TigerVNC RuVNC / not remapped to Control). Physical
+/// Control stays Control so terminal Ctrl+C works on the remote.
 int? logicalKeyToKeysym(LogicalKeyboardKey key) {
   // Modifiers
   if (key == LogicalKeyboardKey.shiftLeft) return 0xffe1;
   if (key == LogicalKeyboardKey.shiftRight) return 0xffe2;
-  if (key == LogicalKeyboardKey.controlLeft) return 0xffe3;
-  if (key == LogicalKeyboardKey.controlRight) return 0xffe4;
+  if (key == LogicalKeyboardKey.controlLeft) return xkControlL;
+  if (key == LogicalKeyboardKey.controlRight) return xkControlR;
   if (key == LogicalKeyboardKey.metaLeft ||
       key == LogicalKeyboardKey.meta ||
       key == LogicalKeyboardKey.superKey) {
-    return 0xffeb; // XK_Super_L (macOS Cmd)
+    return 0xffeb; // XK_Super_L
   }
   if (key == LogicalKeyboardKey.metaRight) return 0xffec;
   if (key == LogicalKeyboardKey.altLeft) return 0xffe9;
@@ -116,13 +122,23 @@ int? logicalKeyToKeysym(LogicalKeyboardKey key) {
 /// Resolve keysym for a Flutter [KeyEvent].
 ///
 /// Prefer [KeyEvent.character] for printables (correct Shift+letter);
-/// otherwise use the logical-key table.
+/// otherwise use the logical-key table. With Control held, prefer the base
+/// letter keysym so Ctrl+C is not lost to a capitalized character path.
 int? keysymForKeyEvent(KeyEvent event) {
   final logical = logicalKeyToKeysym(event.logicalKey);
   // Modifiers / nav / F-keys: always use table (character is often empty/wrong)
   if (logical != null && logical >= 0xff00) {
     return logical;
   }
+
+  final keys = HardwareKeyboard.instance.logicalKeysPressed;
+  final controlHeld = keys.contains(LogicalKeyboardKey.controlLeft) ||
+      keys.contains(LogicalKeyboardKey.controlRight);
+
+  if (controlHeld && logical != null) {
+    return logical;
+  }
+
   final ch = event.character;
   if (ch != null && ch.isNotEmpty) {
     final sym = charToKeysym(ch);

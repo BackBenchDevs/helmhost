@@ -63,10 +63,51 @@ final class HelmFbTexture: NSObject, FlutterTexture {
       width: vImagePixelCount(width),
       rowBytes: dstStride
     )
-    // RGBA8888 → BGRA8888 permute
     let map: [UInt8] = [2, 1, 0, 3]
     let err = vImagePermuteChannels_ARGB8888(&srcBuf, &dstBuf, map, vImage_Flags(kvImageNoFlags))
     return err == kvImageNoError
+  }
+
+  /// Blit a tightly packed RGBA rect into the BGRA pixel buffer at (x,y).
+  func copyRGBARect(
+    _ src: UnsafePointer<UInt8>,
+    x: Int,
+    y: Int,
+    w: Int,
+    h: Int
+  ) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let pb = pixelBuffer, w > 0, h > 0 else { return false }
+    guard x >= 0, y >= 0, x + w <= width, y + h <= height else { return false }
+    CVPixelBufferLockBaseAddress(pb, [])
+    defer { CVPixelBufferUnlockBaseAddress(pb, []) }
+    guard let base = CVPixelBufferGetBaseAddress(pb) else { return false }
+    let dstStride = CVPixelBufferGetBytesPerRow(pb)
+    let srcStride = w * 4
+    // Row-by-row RGBA→BGRA into destination with stride.
+    for row in 0..<h {
+      let srcRow = src.advanced(by: row * srcStride)
+      let dstRow = base.advanced(by: (y + row) * dstStride + x * 4)
+        .assumingMemoryBound(to: UInt8.self)
+      var srcBuf = vImage_Buffer(
+        data: UnsafeMutableRawPointer(mutating: srcRow),
+        height: 1,
+        width: vImagePixelCount(w),
+        rowBytes: srcStride
+      )
+      var dstBuf = vImage_Buffer(
+        data: UnsafeMutableRawPointer(dstRow),
+        height: 1,
+        width: vImagePixelCount(w),
+        rowBytes: w * 4
+      )
+      let map: [UInt8] = [2, 1, 0, 3]
+      let err = vImagePermuteChannels_ARGB8888(
+        &srcBuf, &dstBuf, map, vImage_Flags(kvImageNoFlags))
+      if err != kvImageNoError { return false }
+    }
+    return true
   }
 
   func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? {
@@ -84,6 +125,12 @@ enum HelmFbTexturePlugin {
   private static var ffiLoaded = false
   private static var hhFbSize: (@convention(c) (UInt64, UnsafeMutablePointer<UInt32>, UnsafeMutablePointer<UInt32>) -> Int32)?
   private static var hhFbCopy: (@convention(c) (UInt64, UnsafeMutablePointer<UInt8>, Int) -> Int32)?
+  private static var hhFbCopyRect: (@convention(c) (
+    UInt64, Int32, Int32, UInt32, UInt32, UnsafeMutablePointer<UInt8>, Int
+  ) -> Int32)?
+  /// Reused scratch for full/partial copies (avoids per-present malloc).
+  private static var scratch: UnsafeMutablePointer<UInt8>?
+  private static var scratchCap: Int = 0
 
   static func register(with messenger: FlutterBinaryMessenger, registry: FlutterTextureRegistry) {
     self.registry = registry
@@ -111,12 +158,21 @@ enum HelmFbTexturePlugin {
           result(FlutterError(code: "bad_args", message: nil, details: nil))
           return
         }
-        switch present(sessionId: sessionId, texture: tex) {
+        let rx = (args["x"] as? NSNumber)?.intValue
+        let ry = (args["y"] as? NSNumber)?.intValue
+        let rw = (args["w"] as? NSNumber)?.intValue
+        let rh = (args["h"] as? NSNumber)?.intValue
+        let rect: (Int, Int, Int, Int)? = {
+          guard let x = rx, let y = ry, let w = rw, let h = rh, w > 0, h > 0 else {
+            return nil
+          }
+          return (x, y, w, h)
+        }()
+        switch present(sessionId: sessionId, texture: tex, rect: rect) {
         case .ok:
           registry.textureFrameAvailable(textureId)
           result("ok")
         case .skipped:
-          // No framebuffer yet — normal right after connect.
           result("skipped")
         case .noFfi:
           result(FlutterError(code: "no_ffi", message: "libhelmhost_ffi.dylib not loaded", details: nil))
@@ -138,6 +194,14 @@ enum HelmFbTexturePlugin {
         result(FlutterMethodNotImplemented)
       }
     }
+  }
+
+  private static func ensureScratch(_ need: Int) -> UnsafeMutablePointer<UInt8>? {
+    if let s = scratch, scratchCap >= need { return s }
+    scratch?.deallocate()
+    scratch = UnsafeMutablePointer<UInt8>.allocate(capacity: need)
+    scratchCap = need
+    return scratch
   }
 
   private static func loadFfi() {
@@ -176,11 +240,17 @@ enum HelmFbTexturePlugin {
     NSLog("helmhost: loaded FFI from \(loadedPath ?? "?")")
     typealias SizeFn = @convention(c) (UInt64, UnsafeMutablePointer<UInt32>, UnsafeMutablePointer<UInt32>) -> Int32
     typealias CopyFn = @convention(c) (UInt64, UnsafeMutablePointer<UInt8>, Int) -> Int32
+    typealias CopyRectFn = @convention(c) (
+      UInt64, Int32, Int32, UInt32, UInt32, UnsafeMutablePointer<UInt8>, Int
+    ) -> Int32
     if let sym = dlsym(handle, "hh_fb_size") {
       hhFbSize = unsafeBitCast(sym, to: SizeFn.self)
     }
     if let sym = dlsym(handle, "hh_fb_copy") {
       hhFbCopy = unsafeBitCast(sym, to: CopyFn.self)
+    }
+    if let sym = dlsym(handle, "hh_fb_copy_rect") {
+      hhFbCopyRect = unsafeBitCast(sym, to: CopyRectFn.self)
     }
     if hhFbSize == nil || hhFbCopy == nil {
       NSLog("helmhost: hh_fb_size/hh_fb_copy symbols missing")
@@ -194,7 +264,11 @@ enum HelmFbTexturePlugin {
     case failed
   }
 
-  private static func present(sessionId: UInt64, texture: HelmFbTexture) -> PresentResult {
+  private static func present(
+    sessionId: UInt64,
+    texture: HelmFbTexture,
+    rect: (Int, Int, Int, Int)?
+  ) -> PresentResult {
     guard let sizeFn = hhFbSize, let copyFn = hhFbCopy else { return .noFfi }
     var w: UInt32 = 0
     var h: UInt32 = 0
@@ -203,9 +277,23 @@ enum HelmFbTexturePlugin {
     let wi = Int(w)
     let hi = Int(h)
     if !texture.ensureSize(width: wi, height: hi) { return .failed }
+
+    if let (x, y, rw, rh) = rect,
+       x >= 0, y >= 0, x + rw <= wi, y + rh <= hi,
+       let copyRectFn = hhFbCopyRect
+    {
+      let len = rw * rh * 4
+      guard let buf = ensureScratch(len) else { return .failed }
+      if copyRectFn(
+        sessionId, Int32(x), Int32(y), UInt32(rw), UInt32(rh), buf, len
+      ) != 0 {
+        return .failed
+      }
+      return texture.copyRGBARect(buf, x: x, y: y, w: rw, h: rh) ? .ok : .failed
+    }
+
     let len = wi * hi * 4
-    let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: len)
-    defer { buf.deallocate() }
+    guard let buf = ensureScratch(len) else { return .failed }
     if copyFn(sessionId, buf, len) != 0 { return .failed }
     return texture.copyRGBA(buf, width: wi, height: hi) ? .ok : .failed
   }
