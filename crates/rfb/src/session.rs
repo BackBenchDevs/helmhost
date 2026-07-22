@@ -1,5 +1,6 @@
 //! Async RFB session: handshake then reader + writer tasks on command/event queues.
 
+use crate::encoding::ENC_TIGHT;
 use crate::encoding::{encoding_name, rect_fits_framebuffer, RectAction};
 use crate::handshake::{
     finish_client_server_init, handshake_security_and_init, parse_security_result,
@@ -12,8 +13,7 @@ use crate::messages::{
     encode_set_encodings, encode_set_pixel_format, parse_copyrect_src, parse_fb_update_header,
     parse_rect_header, parse_server_cut_text, ENC_COPYRECT, ENC_DESKTOP_SIZE,
     ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT, ENC_RAW, ENC_ZRLE, MSG_BELL,
-    MSG_END_OF_CONTINUOUS_UPDATES, MSG_FRAMEBUFFER_UPDATE, MSG_SERVER_CUT_TEXT,
-    MSG_SET_COLOUR_MAP,
+    MSG_END_OF_CONTINUOUS_UPDATES, MSG_FRAMEBUFFER_UPDATE, MSG_SERVER_CUT_TEXT, MSG_SET_COLOUR_MAP,
 };
 use crate::pixel_format::PixelFormat;
 use crate::tight::{read_and_decode_tight, TightStream};
@@ -21,7 +21,6 @@ use crate::vencrypt::{
     negotiate_vencrypt_subtype, wrap_tcp_tls, TlsOptions, VENCRYPT_TLSNONE, VENCRYPT_TLSVNC,
 };
 use crate::zrle::{decode_zrle_with, ZrleStream};
-use crate::encoding::ENC_TIGHT;
 use helmhost_core::{
     Creds, FramebufferCache, Rect, SessionCommand, SessionEvent, SessionHandle, SessionId,
     DEFAULT_QUEUE_CAPACITY,
@@ -274,13 +273,7 @@ async fn writer_loop<W: AsyncWrite + Unpin>(
                 drop(g);
                 write_all(wr, &msg).await
             }
-            SessionCommand::EnableContinuousUpdates {
-                enable,
-                x,
-                y,
-                w,
-                h,
-            } => {
+            SessionCommand::EnableContinuousUpdates { enable, x, y, w, h } => {
                 let msg = encode_enable_continuous_updates(enable, x, y, w, h);
                 write_all(wr, &msg).await
             }
@@ -535,10 +528,9 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 let g = state.lock().await;
                 g.pixel_format
             };
-            let rgba =
-                read_and_decode_tight(rd, tight, &pf, u32::from(hdr.w), u32::from(hdr.h))
-                    .await
-                    .map_err(|e| format!("tight decode failed: {e}"))?;
+            let rgba = read_and_decode_tight(rd, tight, &pf, u32::from(hdr.w), u32::from(hdr.h))
+                .await
+                .map_err(|e| format!("tight decode failed: {e}"))?;
             let rect = Rect {
                 x: i32::from(hdr.x),
                 y: i32::from(hdr.y),

@@ -1,8 +1,6 @@
 //! SessionFactory for RFB.
 
-use crate::encoding::{
-    encodings_with_quality_compress, preferred_encodings, BandwidthPreset,
-};
+use crate::encoding::{encodings_with_quality_compress, preferred_encodings, BandwidthPreset};
 use crate::session::connect_tcp;
 use crate::vencrypt::TlsOptions;
 use helmhost_core::{
