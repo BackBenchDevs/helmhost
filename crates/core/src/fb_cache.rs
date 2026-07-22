@@ -59,12 +59,10 @@ impl FramebufferCache {
             ));
         }
         for row in 0..rect.h {
-            let src_off =
-                ((y + row) as usize * self.width as usize + x as usize) * 4;
+            let src_off = ((y + row) as usize * self.width as usize + x as usize) * 4;
             let dst_off = row as usize * rect.w as usize * 4;
             let len = rect.w as usize * 4;
-            out[dst_off..dst_off + len]
-                .copy_from_slice(&self.pixels[src_off..src_off + len]);
+            out[dst_off..dst_off + len].copy_from_slice(&self.pixels[src_off..src_off + len]);
         }
         Ok(())
     }

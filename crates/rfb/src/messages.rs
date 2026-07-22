@@ -49,13 +49,7 @@ pub fn encode_fb_update_request(incremental: bool, x: u16, y: u16, w: u16, h: u1
 }
 
 /// TigerVNC EnableContinuousUpdates (client → server), 10 bytes.
-pub fn encode_enable_continuous_updates(
-    enable: bool,
-    x: u16,
-    y: u16,
-    w: u16,
-    h: u16,
-) -> [u8; 10] {
+pub fn encode_enable_continuous_updates(enable: bool, x: u16, y: u16, w: u16, h: u16) -> [u8; 10] {
     let mut b = [0u8; 10];
     b[0] = CLIENT_ENABLE_CONTINUOUS_UPDATES;
     b[1] = u8::from(enable);

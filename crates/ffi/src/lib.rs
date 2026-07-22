@@ -124,14 +124,16 @@ fn err_cstr(e: impl Into<String>) -> *mut c_char {
 }
 
 /// Free a string returned by this library.
+///
+/// # Safety
+/// `s` must be null or a pointer previously returned by this library (via
+/// `CString::into_raw`).
 #[no_mangle]
-pub extern "C" fn hh_string_free(s: *mut c_char) {
+pub unsafe extern "C" fn hh_string_free(s: *mut c_char) {
     if s.is_null() {
         return;
     }
-    unsafe {
-        drop(CString::from_raw(s));
-    }
+    drop(CString::from_raw(s));
 }
 
 #[no_mangle]
@@ -206,14 +208,12 @@ pub extern "C" fn hh_connect(
     );
 
     let result = RT.block_on(async {
-        let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
-        state.factory.configure_connect(tls, prefer);
-        state
-            .factory
-            .configure_bandwidth(bandwidth, quality, compress);
+        // Connect on a local factory so we never hold STATE across await.
+        let mut factory = RfbSessionFactory::new();
+        factory.configure_connect(tls.clone(), prefer);
+        factory.configure_bandwidth(bandwidth, quality, compress);
         use helmhost_core::SessionFactory;
-        let handle = state
-            .factory
+        let handle = factory
             .connect(
                 ConnectTarget {
                     host: host.clone(),
@@ -222,6 +222,12 @@ pub extern "C" fn hh_connect(
                 Creds { username, password },
             )
             .await?;
+
+        let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
+        state.factory.configure_connect(tls, prefer);
+        state
+            .factory
+            .configure_bandwidth(bandwidth, quality, compress);
         let id = handle.id.0;
         state.manager.insert(handle.id, handle.commands.clone());
         state.sessions.insert(id, handle);
@@ -357,10 +363,7 @@ pub unsafe extern "C" fn hh_fb_copy_rect(
         return -1;
     };
     let slice = unsafe { std::slice::from_raw_parts_mut(out, out_len) };
-    match fb.copy_rect_to(
-        helmhost_core::Rect { x, y, w, h },
-        slice,
-    ) {
+    match fb.copy_rect_to(helmhost_core::Rect { x, y, w, h }, slice) {
         Ok(()) => 0,
         Err(_) => -1,
     }
@@ -406,9 +409,15 @@ pub extern "C" fn hh_request_desktop_size(session_id: u64, w: u32, h: u32) -> *m
 #[no_mangle]
 pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
     let result = RT.block_on(async {
-        let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
-        if let Some(handle) = state.sessions.remove(&session_id) {
-            state.manager.remove(SessionId(session_id));
+        let handle = {
+            let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
+            let handle = state.sessions.remove(&session_id);
+            if handle.is_some() {
+                state.manager.remove(SessionId(session_id));
+            }
+            handle
+        };
+        if let Some(handle) = handle {
             handle.close().await?;
         }
         Ok::<_, String>(())
@@ -421,14 +430,19 @@ pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
 
 fn send_cmd(session_id: u64, cmd: SessionCommand) -> *mut c_char {
     let result = RT.block_on(async {
-        let state = STATE.lock().map_err(|_| "lock".to_string())?;
-        if !state.focus.allows(SessionId(session_id)) {
-            return Err("focus not grabbed".to_string());
-        }
-        let Some(handle) = state.sessions.get(&session_id) else {
-            return Err("unknown session".to_string());
+        let tx = {
+            let state = STATE.lock().map_err(|_| "lock".to_string())?;
+            if !state.focus.allows(SessionId(session_id)) {
+                return Err("focus not grabbed".to_string());
+            }
+            let Some(handle) = state.sessions.get(&session_id) else {
+                return Err("unknown session".to_string());
+            };
+            handle.commands.clone()
         };
-        handle.send(cmd).await
+        tx.send(cmd)
+            .await
+            .map_err(|_| "session command queue closed".to_string())
     });
     match result {
         Ok(()) => ok_cstr("ok"),
@@ -455,11 +469,16 @@ fn send_cmd_try(session_id: u64, cmd: SessionCommand) -> c_int {
 
 fn send_cmd_unfocused(session_id: u64, cmd: SessionCommand) -> *mut c_char {
     let result = RT.block_on(async {
-        let state = STATE.lock().map_err(|_| "lock".to_string())?;
-        let Some(handle) = state.sessions.get(&session_id) else {
-            return Err("unknown session".to_string());
+        let tx = {
+            let state = STATE.lock().map_err(|_| "lock".to_string())?;
+            let Some(handle) = state.sessions.get(&session_id) else {
+                return Err("unknown session".to_string());
+            };
+            handle.commands.clone()
         };
-        handle.send(cmd).await
+        tx.send(cmd)
+            .await
+            .map_err(|_| "session command queue closed".to_string())
     });
     match result {
         Ok(()) => ok_cstr("ok"),
@@ -509,9 +528,17 @@ pub extern "C" fn hh_registry_set_path(path: *const c_char) -> *mut c_char {
     match STATE.lock() {
         Ok(mut s) => {
             if path.exists() {
-                if let Ok(reg) = ConnectionRegistry::load_from_path(&path) {
-                    s.registry = reg;
+                match ConnectionRegistry::load_from_path(&path) {
+                    Ok(reg) => s.registry = reg,
+                    Err(e) => {
+                        eprintln!("[hh_registry_set_path] load failed {}: {e}", path.display());
+                    }
                 }
+            } else {
+                eprintln!(
+                    "[hh_registry_set_path] missing {} — starting empty",
+                    path.display()
+                );
             }
             s.registry_path = Some(path);
             ok_cstr("ok")

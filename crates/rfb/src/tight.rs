@@ -52,10 +52,7 @@ pub fn read_compact(buf: &[u8]) -> Result<(usize, usize), String> {
     }
     let b1 = buf[1];
     if b1 & 0x80 == 0 {
-        return Ok((
-            ((b0 & 0x7F) as usize) | (((b1 & 0x7F) as usize) << 7),
-            2,
-        ));
+        return Ok((((b0 & 0x7F) as usize) | (((b1 & 0x7F) as usize) << 7), 2));
     }
     if buf.len() < 3 {
         return Err("tight compact: truncated (3)".into());
@@ -278,7 +275,13 @@ async fn read_tight_pixels<R: AsyncRead + Unpin>(
 
 // --- sync decode helpers (for decode_tight_body) ---
 
-fn decode_fill(pf: &PixelFormat, w: u32, h: u32, body: &[u8], pos: usize) -> Result<Vec<u8>, String> {
+fn decode_fill(
+    pf: &PixelFormat,
+    w: u32,
+    h: u32,
+    body: &[u8],
+    pos: usize,
+) -> Result<Vec<u8>, String> {
     let (r, g, b) = if is_888(pf) {
         if body.len() < pos + 3 {
             return Err("tight fill truncated".into());
@@ -327,8 +330,7 @@ fn decode_basic_body(
             if body_at_filter.len() < pal_end {
                 return Err("tight palette data truncated".into());
             }
-            let palette =
-                build_palette(pf, is888, &body_at_filter[1..pal_end], palette_size, bpc);
+            let palette = build_palette(pf, is888, &body_at_filter[1..pal_end], palette_size, bpc);
             let row_size = if palette_size <= 2 {
                 w.div_ceil(8) as usize
             } else {
@@ -361,7 +363,10 @@ fn read_tight_pixels_sync(
         if body.len() < zstart + zlen {
             return Err("tight zlib data truncated".into());
         }
-        inflate_stream(&mut streams.streams[stream_idx], &body[zstart..zstart + zlen])
+        inflate_stream(
+            &mut streams.streams[stream_idx],
+            &body[zstart..zstart + zlen],
+        )
     }
 }
 

@@ -12,10 +12,10 @@ import 'package:path_provider/path_provider.dart';
 ///   thumbs/
 /// ```
 ///
-/// On first launch, migrates files from the former Application Support
-/// directory (`…/dev.helmhost.helmhostClient/`) if present. Prefers the
-/// non-container macOS Application Support tree over the sandboxed Container
-/// copy (which may be stale).
+/// On macOS App Sandbox, `HOME` is the container
+/// (`…/Library/Containers/<bundle>/Data`). We strip that suffix so the app
+/// uses the real user `~/.helmhost` (Release entitlement:
+/// `temporary-exception…/.helmhost/`).
 class AppPaths {
   AppPaths._();
 
@@ -29,6 +29,32 @@ class AppPaths {
 
   static Directory? _root;
   static bool _migrated = false;
+  static String? _realHome;
+
+  /// Absolute path to the user's real home (not the App Sandbox container).
+  static String? realHomeDirectory() {
+    if (_realHome != null) return _realHome;
+
+    if (Platform.isWindows) {
+      final profile = Platform.environment['USERPROFILE'];
+      if (profile != null && profile.isNotEmpty) {
+        _realHome = profile;
+      }
+      return _realHome;
+    }
+
+    var home = Platform.environment['HOME'];
+    if (home == null || home.isEmpty) return null;
+
+    // Sandboxed macOS: HOME = /Users/you/Library/Containers/<id>/Data
+    const marker = '/Library/Containers/';
+    final idx = home.indexOf(marker);
+    if (idx > 0) {
+      home = home.substring(0, idx);
+    }
+    _realHome = home;
+    return _realHome;
+  }
 
   /// `~/.helmhost` (created if missing). Runs legacy migration once.
   static Future<Directory> root() async {
@@ -36,10 +62,8 @@ class AppPaths {
       await _maybeMigrate();
       return _root!;
     }
-    final home = Platform.environment['HOME'] ??
-        Platform.environment['USERPROFILE'];
+    final home = realHomeDirectory();
     if (home == null || home.isEmpty) {
-      // Extremely rare — fall back to Application Support.
       final fallback = await getApplicationSupportDirectory();
       _root = Directory(fallback.path);
     } else {
@@ -96,16 +120,20 @@ class AppPaths {
     await copyIfPresent(thumbsDirName, recursive: true);
   }
 
-  /// Prefer non-container Application Support; fall back to path_provider.
+  /// Prefer non-container Application Support; also consider container `.helmhost`.
   static Future<Directory?> _pickLegacyRoot() async {
     final candidates = <Directory>[];
+    final home = realHomeDirectory();
 
-    final home = Platform.environment['HOME'] ??
-        Platform.environment['USERPROFILE'];
     if (home != null && home.isNotEmpty) {
       if (Platform.isMacOS) {
         candidates.add(
           Directory('$home/Library/Application Support/$legacyBundleFolder'),
+        );
+        candidates.add(
+          Directory(
+            '$home/Library/Containers/$legacyBundleFolder/Data/$dirName',
+          ),
         );
       } else if (Platform.isLinux) {
         candidates.add(
@@ -124,13 +152,12 @@ class AppPaths {
     } catch (_) {}
 
     Directory? best;
-    int bestSize = -1;
+    var bestSize = -1;
     for (final dir in candidates) {
       if (!await dir.exists()) continue;
       final conn = File('${dir.path}/$connectionsFileName');
       if (!await conn.exists()) continue;
       final size = await conn.length();
-      // Prefer first candidate when sizes tie (non-container listed first).
       if (size > bestSize) {
         best = dir;
         bestSize = size;

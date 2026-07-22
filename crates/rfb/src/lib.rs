@@ -16,8 +16,8 @@ pub mod zrle;
 
 pub use encoding::{
     compress_level_encoding, encoding_name, encodings_with_quality_compress, preferred_encodings,
-    preferred_encodings_for, quality_level_encoding, BandwidthPreset, ENC_CONTINUOUS_UPDATES,
-    ENC_TIGHT, RectAction,
+    preferred_encodings_for, quality_level_encoding, BandwidthPreset, RectAction,
+    ENC_CONTINUOUS_UPDATES, ENC_TIGHT,
 };
 pub use factory::{connect_stream, RfbSessionFactory};
 pub use pixel_format::PixelFormat;

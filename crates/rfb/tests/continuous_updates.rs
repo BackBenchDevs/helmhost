@@ -107,7 +107,8 @@ async fn continuous_updates_skips_fbur_after_eocu() {
         match timeout(Duration::from_millis(400), stream.read(&mut buf)).await {
             Ok(Ok(n)) if n > 0 => {
                 assert_ne!(
-                    buf[0], CLIENT_FB_UPDATE_REQUEST,
+                    buf[0],
+                    CLIENT_FB_UPDATE_REQUEST,
                     "must not RequestUpdate while Continuous Updates enabled; got {:?}",
                     &buf[..n]
                 );
