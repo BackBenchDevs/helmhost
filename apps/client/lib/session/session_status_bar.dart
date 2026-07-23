@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../session_helpers.dart';
+import '../ui/app_about.dart';
 import 'session_link_stats.dart';
 import 'session_overview.dart';
 
@@ -49,6 +50,7 @@ class SessionStatusBar extends StatelessWidget {
     this.bandwidthPresetLabel,
     this.onBandwidthPreset,
     this.bandwidthChoices = const [],
+    this.coreVersion,
   });
 
   final SessionConnState connState;
@@ -68,6 +70,7 @@ class SessionStatusBar extends StatelessWidget {
   final String? bandwidthPresetLabel;
   final ValueChanged<String>? onBandwidthPreset;
   final List<String> bandwidthChoices;
+  final String? coreVersion;
 
   Color _statusColor(BuildContext context) {
     final stale = linkStats.isStale();
@@ -190,6 +193,9 @@ class SessionStatusBar extends StatelessWidget {
           child: Row(
             children: [
               const SizedBox(width: 8),
+              Expanded(
+                child: AppVersionChip(coreVersion: coreVersion),
+              ),
               Builder(
                 builder: (ctx) => Tooltip(
                   message:
@@ -197,7 +203,7 @@ class SessionStatusBar extends StatelessWidget {
                   child: InkWell(
                     onTap: () => _showInsights(ctx),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
                       child: Text(
                         _statusLabel,
                         style: TextStyle(
@@ -213,8 +219,8 @@ class SessionStatusBar extends StatelessWidget {
               if (errorText != null &&
                   errorText!.isNotEmpty &&
                   connState != SessionConnState.live) ...[
-                const SizedBox(width: 8),
-                Expanded(
+                const SizedBox(width: 4),
+                Flexible(
                   child: Text(
                     errorText!,
                     maxLines: 1,
@@ -225,8 +231,20 @@ class SessionStatusBar extends StatelessWidget {
                     ),
                   ),
                 ),
-              ] else
-                const Spacer(),
+              ],
+              IconButton(
+                key: const Key('session-about-help'),
+                tooltip: 'About / Help',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
+                iconSize: 16,
+                onPressed: () => showAppAbout(
+                  context: context,
+                  coreVersion: coreVersion,
+                ),
+                icon: const Icon(Icons.help_outline),
+              ),
               IconButton(
                 tooltip:
                     'Paste (⌘V / Shift+Insert). Copy: use remote shortcut '

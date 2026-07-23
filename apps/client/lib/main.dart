@@ -10,6 +10,7 @@ import 'prefs.dart';
 import 'session/session_ipc.dart';
 import 'session/session_page.dart';
 import 'session_helpers.dart';
+import 'ui/app_about.dart';
 import 'update/app_updater.dart';
 
 Future<void> main(List<String> args) async {
@@ -141,6 +142,7 @@ class _HubAppState extends State<HubApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Helmhost',
+      navigatorKey: aboutNavigatorKey,
       theme: helmTheme(Brightness.light),
       darkTheme: helmTheme(Brightness.dark),
       themeMode: _themeMode,
@@ -189,6 +191,7 @@ class SessionApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: title,
+      navigatorKey: aboutNavigatorKey,
       theme: helmTheme(Brightness.light),
       darkTheme: helmTheme(Brightness.dark),
       themeMode: themeMode,

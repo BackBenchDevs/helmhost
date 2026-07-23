@@ -89,11 +89,11 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "dev.helmhost" "\0"
-            VALUE "FileDescription", "helmhost" "\0"
+            VALUE "CompanyName", "BackBenchDevs" "\0"
+            VALUE "FileDescription", "Helmhost" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "helmhost" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 dev.helmhost. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 BackBenchDevs. All rights reserved." "\0"
             VALUE "OriginalFilename", "helmhost.exe" "\0"
             VALUE "ProductName", "helmhost" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
@@ -104,6 +104,13 @@ BEGIN
         VALUE "Translation", 0x409, 1252
     END
 END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// WinSparkle — DSA-4096 public key (WinSparkle 0.8 verifies DSA only; macOS uses Ed25519)
+//
+
+DSAPub      DSAPEM      "../dsa_pub.pem"
 
 #endif    // English (United States) resources
 /////////////////////////////////////////////////////////////////////////////

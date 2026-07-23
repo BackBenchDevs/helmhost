@@ -72,6 +72,11 @@ pub fn hello() -> String {
     "helmhost".to_string()
 }
 
+/// Workspace / crate version for the Rust core (FFI + RFB stack).
+pub fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum FfiEvent {
@@ -140,6 +145,12 @@ pub unsafe extern "C" fn hh_string_free(s: *mut c_char) {
 pub extern "C" fn hh_hello() -> *mut c_char {
     init_logging();
     ok_cstr(hello())
+}
+
+#[no_mangle]
+pub extern "C" fn hh_core_version() -> *mut c_char {
+    init_logging();
+    ok_cstr(core_version())
 }
 
 #[no_mangle]
@@ -789,10 +800,29 @@ pub extern "C" fn hh_registry_resolve(id: *const c_char) -> *mut c_char {
 mod tests {
     use super::*;
     use helmhost_core::SessionId;
+    use std::ffi::CString;
+
+    fn take_cstr(p: *mut c_char) -> String {
+        assert!(!p.is_null());
+        let s = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
+        unsafe {
+            hh_string_free(p);
+        }
+        s
+    }
 
     #[test]
     fn hello_is_helmhost() {
         assert_eq!(hello(), "helmhost");
+    }
+
+    #[test]
+    fn core_version_is_semver() {
+        let v = core_version();
+        assert!(
+            v.split('.').count() >= 3,
+            "expected semver-like core version, got {v}"
+        );
     }
 
     #[test]
@@ -802,5 +832,40 @@ mod tests {
         focus.grab(SessionId(7));
         assert!(focus.allows(SessionId(7)));
         assert!(!focus.allows(SessionId(8)));
+    }
+
+    #[test]
+    fn registry_set_path_upsert_json_list_remove_round_trip() {
+        let path = std::env::temp_dir().join(format!(
+            "helmhost-ffi-registry-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let path_c = CString::new(path.to_str().unwrap()).unwrap();
+        let set = take_cstr(hh_registry_set_path(path_c.as_ptr()));
+        assert_eq!(set, "ok");
+
+        let json = r#"{"id":"lab:5901","host":"lab","port":5901,"display_name":"Lab"}"#;
+        let json_c = CString::new(json).unwrap();
+        let up = take_cstr(hh_registry_upsert_json(json_c.as_ptr()));
+        assert_eq!(up, "ok");
+
+        let list = take_cstr(hh_registry_list());
+        assert!(!list.starts_with("ERR:"), "{list}");
+        assert!(list.contains("lab:5901"), "{list}");
+        assert!(list.contains("Lab"), "{list}");
+
+        let id_c = CString::new("lab:5901").unwrap();
+        let rm = take_cstr(hh_registry_remove(id_c.as_ptr()));
+        assert_eq!(rm, "ok");
+
+        let list2 = take_cstr(hh_registry_list());
+        assert!(!list2.contains("lab:5901"), "{list2}");
+        assert!(path.exists());
+        let _ = std::fs::remove_file(&path);
     }
 }
