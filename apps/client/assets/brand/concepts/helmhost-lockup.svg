@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" role="img" aria-label="Helmhost">
+  <!-- About / splash lockup: proportioned shield+wheel + HELMHOST + tagline. -->
+  <rect width="720" height="200" rx="16" fill="#12161F"/>
+  <g transform="translate(20,20)">
+    <rect width="160" height="160" rx="36" fill="#0B1224"/>
+    <path fill="#7A8499" d="
+      M80 20
+      C104 20 122 28 128 38
+      L128 78
+      C128 108 106 128 80 140
+      C54 128 32 108 32 78
+      L32 38
+      C38 28 56 20 80 20 Z"/>
+    <g transform="translate(80,74)">
+      <g fill="#F4F6FA">
+        <rect x="-3" y="-40" width="6" height="9" rx="3"/>
+        <rect x="-3" y="31" width="6" height="9" rx="3"/>
+        <rect x="-40" y="-3" width="9" height="6" rx="3"/>
+        <rect x="31" y="-3" width="9" height="6" rx="3"/>
+        <g transform="rotate(45)"><rect x="-2.5" y="-38" width="5" height="8" rx="2.5"/></g>
+        <g transform="rotate(135)"><rect x="-2.5" y="-38" width="5" height="8" rx="2.5"/></g>
+        <g transform="rotate(225)"><rect x="-2.5" y="-38" width="5" height="8" rx="2.5"/></g>
+        <g transform="rotate(315)"><rect x="-2.5" y="-38" width="5" height="8" rx="2.5"/></g>
+      </g>
+      <g fill="none" stroke="#F4F6FA" stroke-linecap="round">
+        <circle r="29" stroke-width="6.5"/>
+        <circle r="10" stroke-width="4.5"/>
+        <g stroke-width="4">
+          <line x1="0" y1="-10" x2="0" y2="-26"/>
+          <line x1="0" y1="10" x2="0" y2="26"/>
+          <line x1="-10" y1="0" x2="-26" y2="0"/>
+          <line x1="10" y1="0" x2="26" y2="0"/>
+          <line x1="-7" y1="-7" x2="-18" y2="-18"/>
+          <line x1="7" y1="7" x2="18" y2="18"/>
+          <line x1="7" y1="-7" x2="18" y2="-18"/>
+          <line x1="-7" y1="7" x2="-18" y2="18"/>
+        </g>
+      </g>
+      <circle r="4.5" fill="#F4F6FA"/>
+    </g>
+  </g>
+  <text x="200" y="92"
+        font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="52" font-weight="700" letter-spacing="0.06em" fill="#F4F6FA">HELMHOST</text>
+  <text x="202" y="132"
+        font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="20" font-weight="500" fill="#8B93A7">Remote desktop for your machines.</text>
+</svg>
