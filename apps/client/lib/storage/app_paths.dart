@@ -24,8 +24,8 @@ class AppPaths {
   static const credentialsFileName = 'credentials.vault';
   static const thumbsDirName = 'thumbs';
 
-  /// Historical Flutter macOS / Linux bundle folder name under Application Support.
-  static const legacyBundleFolder = 'dev.helmhost.helmhostClient';
+  /// Bundle / APPLICATION_ID folder name under Application Support / .local/share.
+  static const legacyBundleFolder = 'com.bbdevs.helmhost';
 
   static Directory? _root;
   static bool _migrated = false;

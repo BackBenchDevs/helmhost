@@ -55,7 +55,7 @@ Version: ${VER}
 Section: net
 Priority: optional
 Architecture: ${ARCH}
-Maintainer: Helmhost <noreply@helmhost.dev>
+Maintainer: BackBenchDevs <noreply@bbdevs.com>
 Installed-Size: ${INSTALLED_SIZE}
 Depends: libgtk-3-0, liblzma5
 Homepage: https://github.com/BackBenchDevs/helmhost

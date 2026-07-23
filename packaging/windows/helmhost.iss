@@ -16,7 +16,7 @@
 #endif
 
 #define MyAppName "Helmhost"
-#define MyAppPublisher "Helmhost"
+#define MyAppPublisher "BackBenchDevs"
 #define MyAppURL "https://github.com/BackBenchDevs/helmhost"
 #define MyAppExeName "helmhost.exe"
 
@@ -35,7 +35,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir={#MyOutDir}
 OutputBaseFilename=helmhost-{#MyAppChannel}-windows-x64-v{#MyAppVersion}-setup
-SetupIconFile=
+SetupIconFile=..\..\apps\client\windows\runner\resources\app_icon.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -46,6 +46,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
+LicenseFile=..\..\LICENSE
 VersionInfoVersion={#MyAppVersion}.0
 VersionInfoProductName={#MyAppName}
 ; Replace previous install of the same AppId.

@@ -6,7 +6,7 @@ set -euo pipefail
 APP="${1:-}"
 OUT_PKG="${2:-}"
 VER="${3:-}"
-ID="dev.helmhost.client"
+ID="com.bbdevs.helmhost"
 
 if [[ -z "$APP" || -z "$OUT_PKG" || -z "$VER" ]]; then
   echo "usage: $0 <Helmhost.app|helmhost.app> <out.pkg> <version>" >&2
@@ -24,6 +24,9 @@ trap cleanup EXIT
 mkdir -p "$STAGE"
 # Install as Helmhost.app under /Applications
 ditto "$APP" "$STAGE/Helmhost.app"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+chmod +x "$ROOT/scripts/package_macos_uninstall.sh"
+"$ROOT/scripts/package_macos_uninstall.sh" "$STAGE"
 
 pkgbuild \
   --root "$STAGE" \
@@ -32,4 +35,4 @@ pkgbuild \
   --install-location /Applications \
   "$OUT_PKG"
 
-echo "wrote $OUT_PKG (id=$ID version=$VER)"
+echo "wrote $OUT_PKG (id=$ID version=$VER, includes Uninstall Helmhost.app)"
