@@ -3,6 +3,27 @@
   <channel>
     <title>Helmhost rcs</title>
     <language>en</language>
-    <!-- Populated by release workflow (scripts/generate_appcast.sh). -->
+    <item>
+      <title>Helmhost v0.1.0</title>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <pubDate>Thu, 23 Jul 2026 11:52:45 +0000</pubDate>
+      <enclosure url="https://github.com/BackBenchDevs/helmhost/releases/download/v0.1.0-rc.3/helmhost-rcs-macos-arm64-v0.1.0.zip"
+                 sparkle:edSignature=""
+                 sparkle:os="macos"
+                 length="21502558"
+                 type="application/octet-stream" />
+    </item>
+    <item>
+      <title>Helmhost v0.1.0</title>
+      <sparkle:version>0.1.0+3</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <pubDate>Thu, 23 Jul 2026 11:52:45 +0000</pubDate>
+      <enclosure url="https://github.com/BackBenchDevs/helmhost/releases/download/v0.1.0-rc.3/helmhost-rcs-windows-x64-v0.1.0-setup.exe"
+                 sparkle:dsaSignature=""
+                 sparkle:os="windows"
+                 length="13575070"
+                 type="application/octet-stream" />
+    </item>
   </channel>
 </rss>
