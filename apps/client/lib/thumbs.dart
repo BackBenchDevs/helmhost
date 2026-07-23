@@ -20,7 +20,7 @@ Uint8List? encodeFbJpegThumb(Uint8List rgba, int w, int h, {int width = 320}) {
 }
 
 Future<void> saveSessionThumb(
-  HelmBridge bridge,
+  IHelmBridge bridge,
   String entryId,
   int sessionId,
 ) async {

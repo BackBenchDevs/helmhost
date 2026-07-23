@@ -16,10 +16,10 @@ void main() {
     final prefs = await AppPrefs.open();
     await tester.pumpWidget(HubApp(prefs: prefs));
     await tester.pump();
-    expect(find.text('HelmHost'), findsOneWidget);
     expect(find.text('Connect'), findsOneWidget);
     expect(find.textContaining('No connections yet'), findsOneWidget);
-    expect(find.byTooltip('New connection'), findsOneWidget);
+    // Windows shell: + lives in the profile sidebar, not a tooltip AppBar action.
+    expect(find.text('New profile…'), findsOneWidget);
     expect(find.byType(FloatingActionButton), findsNothing);
   });
 
@@ -44,9 +44,7 @@ void main() {
     expect(find.byTooltip('Import'), findsOneWidget);
     expect(find.byTooltip('Export library'), findsOneWidget);
     expect(find.byType(LibraryStatusBar), findsOneWidget);
-    // AppBar keeps Connect / New only — no shell/theme cluster in actions.
-    final appBar = tester.widget<AppBar>(find.byType(AppBar));
-    expect(appBar.actions, isNull);
+    expect(find.byType(AppBar), findsNothing);
   });
 
   testWidgets('AuthDialog shows username when needed', (tester) async {

@@ -14,6 +14,7 @@ class MainFlutterWindow: NSWindow {
       with: flutterViewController.engine.binaryMessenger,
       registry: flutterViewController.engine
     )
+    HelmhostAboutBridge.attach(binaryMessenger: flutterViewController.engine.binaryMessenger)
 
     FlutterMultiWindowPlugin.setOnWindowCreatedCallback { controller in
       RegisterGeneratedPlugins(registry: controller)
@@ -21,6 +22,7 @@ class MainFlutterWindow: NSWindow {
         with: controller.engine.binaryMessenger,
         registry: controller.engine
       )
+      HelmhostAboutBridge.attach(binaryMessenger: controller.engine.binaryMessenger)
     }
 
     super.awakeFromNib()

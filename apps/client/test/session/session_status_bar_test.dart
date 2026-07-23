@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:helmhost/gen/app_version.dart';
 import 'package:helmhost/session/session_link_stats.dart';
 import 'package:helmhost/session/session_status_bar.dart';
 import 'package:helmhost/session_helpers.dart';
+import 'package:helmhost/ui/app_about.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   group('sessionDisposeNotifiesHub', () {
     test('embedded soft dispose does not notify hub', () {
       expect(sessionDisposeNotifiesHub(closeOnExit: false), isFalse);
@@ -61,10 +64,44 @@ void main() {
         ),
       );
       expect(find.textContaining('Live'), findsOneWidget);
+      expect(find.byKey(const Key('app-version-chip')), findsOneWidget);
       await tester.tap(find.textContaining('Live'));
       await tester.pumpAndSettle();
       expect(find.textContaining('grog.example:5901'), findsOneWidget);
       expect(find.textContaining('Update rate:'), findsOneWidget);
+    });
+
+    testWidgets('version chip shows classic line; help opens About dialog',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: aboutNavigatorKey,
+          home: Scaffold(
+            bottomNavigationBar: SessionStatusBar(
+              connState: SessionConnState.connecting,
+              linkStats: SessionLinkStats(),
+              host: 'h',
+              port: 5900,
+              scaleMode: ViewScaleMode.fit,
+              grabbed: false,
+              onPaste: () {},
+              onScaleChanged: (_) {},
+              onToggleGrab: () {},
+              coreVersion: '0.1.0',
+            ),
+          ),
+        ),
+      );
+      expect(find.byKey(const Key('app-version-chip')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('session-about-help')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('app-about-dialog')), findsOneWidget);
+      expect(find.text(kAppProduct), findsWidgets);
+      expect(find.byKey(const Key('app-about-check-updates')), findsOneWidget);
+      expect(find.byKey(const Key('app-about-version')), findsOneWidget);
+      expect(find.text('Licensing'), findsOneWidget);
+      expect(find.text(kAppCopyright), findsOneWidget);
+      expect(find.textContaining('Debug'), findsNothing);
     });
 
     testWidgets('shows Release input control', (tester) async {

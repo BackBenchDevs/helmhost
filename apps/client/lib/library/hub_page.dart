@@ -9,7 +9,6 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../bridge.dart';
-import '../gen/app_version.dart';
 import '../logging/logger.dart';
 import '../prefs.dart';
 import '../session/credentials.dart';
@@ -19,6 +18,7 @@ import '../session_helpers.dart';
 import '../storage/app_paths.dart';
 import '../storage/credential_store.dart';
 import '../thumbs.dart';
+import '../ui/app_about.dart';
 import '../update/app_uninstall.dart';
 import '../update/app_updater.dart';
 import 'auth_dialog.dart';
@@ -72,6 +72,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
   late final ICredentialStore _credentials =
       widget.credentials ?? createCredentialStore();
   String? _error;
+  String? _coreVersion;
   List<LibraryCard> _cards = [];
   List<ConnectionProfileCard> _profiles = [];
   final _search = TextEditingController();
@@ -100,6 +101,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       (_) => _refreshLiveThumbs(),
     );
     unawaited(_registerIpc());
+    bindAboutMethodChannel(coreVersion: () => _coreVersion);
     _boot();
   }
 
@@ -218,8 +220,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
   Future<void> _boot() async {
     try {
       final b = widget.bridge ?? HelmBridge.open();
-      // Smoke the FFI surface; ignore payload (status uses kAppStatusLine).
+      // Smoke FFI; cache core version for About / status chip.
       b.hello();
+      final coreVer = b.coreVersion();
       await b.initRegistry();
       String? thumbsRoot;
       // Injected bridges (tests) skip path_provider — it can hang without plugins.
@@ -231,6 +234,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       if (!mounted) return;
       setState(() {
         _bridge = b;
+        _coreVersion = coreVer;
         _thumbsRoot = thumbsRoot;
         _error = null;
         _reloadCards();
@@ -1558,13 +1562,12 @@ class _HubPageState extends State<HubPage> with WindowListener {
       useTabs: useTabs,
       sessionCount: tabSessions.length,
     );
-    final statusText = _error != null ? 'Bridge error' : kAppStatusLine;
-
     final libraryStatusBar = LibraryStatusBar(
       sessionShell: widget.sessionShell,
       viewMode: widget.viewMode,
       themeMode: widget.themeMode,
-      statusText: statusText,
+      coreVersion: _coreVersion,
+      statusMessage: _error != null ? 'Bridge error' : null,
       onToggleShell: _toggleSessionShell,
       onToggleView: _toggleViewMode,
       onCycleTheme: _cycleTheme,

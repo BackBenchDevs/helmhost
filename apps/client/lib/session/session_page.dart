@@ -17,6 +17,7 @@ import '../prefs.dart';
 import '../session_helpers.dart';
 import '../storage/credential_store.dart';
 import '../thumbs.dart';
+import '../ui/app_about.dart';
 import 'buffering_overlay.dart';
 import 'credentials.dart';
 import 'fb_texture.dart';
@@ -91,6 +92,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   ];
 
   late final IHelmBridge _bridge;
+  String? _coreVersion;
   late int _sessionId;
   Timer? _pollTimer;
   Timer? _firstFrameTimer;
@@ -155,6 +157,12 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _qualityLevel = widget.qualityLevel;
     _compressLevel = widget.compressLevel;
     _bridge = widget.bridge ?? HelmBridge.open();
+    try {
+      _coreVersion = _bridge.coreVersion();
+    } catch (_) {
+      _coreVersion = null;
+    }
+    bindAboutMethodChannel(coreVersion: () => _coreVersion);
     if (widget.closeOnExit) {
       SessionWindowCommands.dismissKeepSession = _dismissKeepSession;
     }
@@ -1347,6 +1355,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
               // Applied on next reconnect (live re-advertise may be unavailable).
             }
           },
+          coreVersion: _coreVersion,
         ),
     );
   }

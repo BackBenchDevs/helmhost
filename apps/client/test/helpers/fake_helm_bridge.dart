@@ -39,6 +39,9 @@ class FakeHelmBridge implements IHelmBridge {
   String hello() => 'helmhost';
 
   @override
+  String coreVersion() => '0.1.0';
+
+  @override
   Future<void> initRegistry() async {}
 
   @override

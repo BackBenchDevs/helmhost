@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../session_helpers.dart';
+import '../ui/app_about.dart';
 
 /// Compact VS Code–style status strip for the Library hub chrome.
 class LibraryStatusBar extends StatelessWidget {
@@ -9,12 +10,13 @@ class LibraryStatusBar extends StatelessWidget {
     required this.sessionShell,
     required this.viewMode,
     required this.themeMode,
-    required this.statusText,
     required this.onToggleShell,
     required this.onToggleView,
     required this.onCycleTheme,
     required this.onImport,
     required this.onExport,
+    this.coreVersion,
+    this.statusMessage,
     this.onCheckUpdates,
     this.onUninstall,
   });
@@ -22,12 +24,14 @@ class LibraryStatusBar extends StatelessWidget {
   final SessionShell sessionShell;
   final LibraryViewMode viewMode;
   final ThemeMode themeMode;
-  final String statusText;
   final VoidCallback onToggleShell;
   final VoidCallback onToggleView;
   final VoidCallback onCycleTheme;
   final VoidCallback onImport;
   final VoidCallback onExport;
+  final String? coreVersion;
+  /// Optional note after the version (e.g. bridge error).
+  final String? statusMessage;
   final VoidCallback? onCheckUpdates;
   final VoidCallback? onUninstall;
 
@@ -44,15 +48,23 @@ class LibraryStatusBar extends StatelessWidget {
             children: [
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  statusText,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: scheme.onSurfaceVariant,
-                    fontSize: 11,
-                  ),
+                child: AppVersionChip(
+                  coreVersion: coreVersion,
+                  message: statusMessage,
                 ),
+              ),
+              IconButton(
+                key: const Key('library-about-help'),
+                tooltip: 'About / Help',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
+                iconSize: 16,
+                onPressed: () => showAppAbout(
+                  context: context,
+                  coreVersion: coreVersion,
+                ),
+                icon: const Icon(Icons.help_outline),
               ),
               IconButton(
                 tooltip: sessionShell == SessionShell.tabs

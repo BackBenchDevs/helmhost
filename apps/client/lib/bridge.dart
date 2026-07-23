@@ -6,6 +6,47 @@ import 'package:flutter/foundation.dart';
 
 import 'storage/app_paths.dart';
 
+/// Session/registry surface used by UI (testable without native dylib).
+abstract class IHelmBridge {
+  String hello();
+  /// Rust workspace / FFI crate version (`CARGO_PKG_VERSION`).
+  String coreVersion();
+  Future<void> initRegistry();
+
+  int connect(
+    String host,
+    int port, {
+    String? username,
+    String? password,
+    bool preferVencrypt = false,
+    bool acceptInvalidCerts = false,
+    int bandwidthPreset = 1,
+    int? qualityLevel,
+    int? compressLevel,
+  });
+
+  Map<String, dynamic> pollEvent(int sessionId);
+  (int, int) fbSize(int sessionId);
+  Uint8List fbCopy(int sessionId, int width, int height);
+  void sendPointer(int sessionId, int x, int y, int buttons);
+  void sendKey(int sessionId, bool down, int keysym);
+  void sendClipboard(int sessionId, String text);
+  void requestDesktopSize(int sessionId, int width, int height);
+  void close(int sessionId);
+  void grab(int sessionId);
+  void releaseFocus();
+
+  List<dynamic> registryList();
+  void registryUpsertJson(Map<String, dynamic> entry);
+  void registryRemove(String id);
+  String registryExport();
+  void registryMergeJson(String json);
+  Map<String, dynamic> registryResolve(String id);
+  List<dynamic> profileList();
+  void profileUpsertJson(Map<String, dynamic> profile);
+  void profileRemove(String id);
+}
+
 typedef _HelloNative = Pointer<Utf8> Function();
 typedef _HelloDart = Pointer<Utf8> Function();
 typedef _FreeNative = Void Function(Pointer<Utf8>);
@@ -49,9 +90,11 @@ typedef _FbCopyDart = int Function(int, Pointer<Uint8>, int);
 typedef _DesktopSizeNative = Pointer<Utf8> Function(Uint64, Uint32, Uint32);
 typedef _DesktopSizeDart = Pointer<Utf8> Function(int, int, int);
 
-class HelmBridge {
+class HelmBridge implements IHelmBridge {
   HelmBridge._(this._lib)
       : _hello = _lib.lookupFunction<_HelloNative, _HelloDart>('hh_hello'),
+        _coreVersion =
+            _lib.lookupFunction<_HelloNative, _HelloDart>('hh_core_version'),
         _free = _lib.lookupFunction<_FreeNative, _FreeDart>('hh_string_free'),
         _connect =
             _lib.lookupFunction<_ConnectNative, _ConnectDart>('hh_connect'),
@@ -97,6 +140,7 @@ class HelmBridge {
   // ignore: unused_field
   final DynamicLibrary _lib;
   final _HelloDart _hello;
+  final _HelloDart _coreVersion;
   final _FreeDart _free;
   final _ConnectDart _connect;
   final _PollDart _poll;
@@ -167,8 +211,13 @@ class HelmBridge {
     }
   }
 
+  @override
   String hello() => _take(_hello());
 
+  @override
+  String coreVersion() => _take(_coreVersion());
+
+  @override
   Future<void> initRegistry() async {
     final path = await AppPaths.connectionsJsonPath();
     final c = path.toNativeUtf8();
@@ -182,6 +231,7 @@ class HelmBridge {
 
   Future<Directory> thumbsDir() async => AppPaths.thumbsDir();
 
+  @override
   int connect(
     String host,
     int port, {
@@ -217,12 +267,14 @@ class HelmBridge {
     }
   }
 
+  @override
   Map<String, dynamic> pollEvent(int sessionId) {
     final r = _take(_poll(sessionId));
     if (r.startsWith('ERR:')) throw StateError(r);
     return jsonDecode(r) as Map<String, dynamic>;
   }
 
+  @override
   (int, int) fbSize(int sessionId) {
     final w = malloc<Uint32>();
     final h = malloc<Uint32>();
@@ -238,6 +290,7 @@ class HelmBridge {
 
   /// Copy full RGBA8 framebuffer into a reusable buffer (one memcpy).
   /// Returned view is valid only until the next [fbCopy] call.
+  @override
   Uint8List fbCopy(int sessionId, int width, int height) {
     final len = width * height * 4;
     if (len <= 0) throw StateError('invalid fb size');
@@ -258,16 +311,19 @@ class HelmBridge {
     return Uint8List.sublistView(_fbDart!, 0, len);
   }
 
+  @override
   void sendPointer(int sessionId, int x, int y, int buttons) {
     final rc = _pointer(sessionId, x, y, buttons);
     if (rc != 0) throw StateError('hh_send_pointer failed');
   }
 
+  @override
   void sendKey(int sessionId, bool down, int keysym) {
     final rc = _key(sessionId, down ? 1 : 0, keysym);
     if (rc != 0) throw StateError('hh_send_key failed');
   }
 
+  @override
   void sendClipboard(int sessionId, String text) {
     final c = text.toNativeUtf8();
     try {
@@ -279,21 +335,25 @@ class HelmBridge {
   }
 
   /// TigerVNC RemoteResize: ask server to set remote FB to [width]×[height].
+  @override
   void requestDesktopSize(int sessionId, int width, int height) {
     final r = _take(_requestDesktopSize(sessionId, width, height));
     if (r.startsWith('ERR:')) throw StateError(r);
   }
 
+  @override
   void close(int sessionId) {
     final r = _take(_close(sessionId));
     if (r.startsWith('ERR:')) throw StateError(r);
   }
 
+  @override
   void grab(int sessionId) {
     final r = _take(_grab(sessionId));
     if (r.startsWith('ERR:')) throw StateError(r);
   }
 
+  @override
   void releaseFocus() {
     final r = _take(_release());
     if (r.startsWith('ERR:')) throw StateError(r);
@@ -301,6 +361,7 @@ class HelmBridge {
 
   String focusGet() => _take(_focusGet());
 
+  @override
   List<dynamic> registryList() {
     final r = _take(_regList());
     if (r.startsWith('ERR:')) throw StateError(r);
@@ -322,6 +383,7 @@ class HelmBridge {
     }
   }
 
+  @override
   void registryUpsertJson(Map<String, dynamic> entry) {
     final c = jsonEncode(entry).toNativeUtf8();
     try {
@@ -332,6 +394,7 @@ class HelmBridge {
     }
   }
 
+  @override
   void registryRemove(String id) {
     final c = id.toNativeUtf8();
     try {
@@ -342,12 +405,14 @@ class HelmBridge {
     }
   }
 
+  @override
   String registryExport() {
     final r = _take(_regExport());
     if (r.startsWith('ERR:')) throw StateError(r);
     return r;
   }
 
+  @override
   void registryMergeJson(String json) {
     final c = json.toNativeUtf8();
     try {
@@ -358,12 +423,14 @@ class HelmBridge {
     }
   }
 
+  @override
   List<dynamic> profileList() {
     final r = _take(_profileList());
     if (r.startsWith('ERR:')) throw StateError(r);
     return jsonDecode(r) as List<dynamic>;
   }
 
+  @override
   void profileUpsertJson(Map<String, dynamic> profile) {
     final encoded = jsonEncode(profile);
     // ignore: avoid_print — temporary diagnose for default_display persistence
@@ -378,6 +445,7 @@ class HelmBridge {
     }
   }
 
+  @override
   void profileRemove(String id) {
     final c = id.toNativeUtf8();
     try {
@@ -388,6 +456,7 @@ class HelmBridge {
     }
   }
 
+  @override
   Map<String, dynamic> registryResolve(String id) {
     final c = id.toNativeUtf8();
     try {
