@@ -19,21 +19,23 @@ class NoopAppUninstaller implements IAppUninstaller {
 }
 
 class MacosAppUninstaller implements IAppUninstaller {
+  static const _candidates = <String>[
+    '/Applications/UninstallHelmhost.app',
+    '/Applications/Uninstall Helmhost.app', // older pkgs
+  ];
+
   @override
   Future<void> uninstall() async {
-    final r = await Process.run('open', ['-a', 'Uninstall Helmhost']);
-    if (r.exitCode != 0) {
-      // Fallback: open Applications path if Launch Services name lookup fails.
-      final alt = await Process.run('open', [
-        '/Applications/Uninstall Helmhost.app',
-      ]);
-      if (alt.exitCode != 0) {
-        throw StateError(
-          'Uninstall Helmhost.app not found. Remove /Applications/Helmhost.app '
-          'manually, then: pkgutil --forget com.bbdevs.helmhost',
-        );
-      }
+    final byName = await Process.run('open', ['-a', 'Uninstall Helmhost']);
+    if (byName.exitCode == 0) return;
+    for (final path in _candidates) {
+      final alt = await Process.run('open', [path]);
+      if (alt.exitCode == 0) return;
     }
+    throw StateError(
+      'UninstallHelmhost.app not found. Remove /Applications/Helmhost.app '
+      'manually, then: pkgutil --forget com.bbdevs.helmhost',
+    );
   }
 }
 

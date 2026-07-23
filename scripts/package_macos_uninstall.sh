@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage "Uninstall Helmhost.app" into a pkgbuild root (sibling of Helmhost.app).
+# Stage UninstallHelmhost.app into a pkgbuild root (sibling of Helmhost.app).
 # Usage: package_macos_uninstall.sh <stage-dir>
 set -euo pipefail
 
@@ -9,7 +9,7 @@ if [[ -z "$STAGE" || ! -d "$STAGE" ]]; then
   exit 1
 fi
 
-APP="$STAGE/Uninstall Helmhost.app"
+APP="$STAGE/UninstallHelmhost.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 mkdir -p "$MACOS" "$CONTENTS/Resources"
@@ -41,7 +41,6 @@ cat >"$MACOS/uninstall" <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
 osascript <<'APPLESCRIPT'
-set keepData to true
 try
   set answer to button returned of (display dialog ¬
     "Uninstall Helmhost from /Applications?" & return & return & ¬
@@ -59,7 +58,7 @@ delay 0.5
 
 do shell script "rm -rf '/Applications/Helmhost.app'" with administrator privileges
 do shell script "pkgutil --forget com.bbdevs.helmhost || true" with administrator privileges
-do shell script "rm -rf '/Applications/Uninstall Helmhost.app'" with administrator privileges
+do shell script "rm -rf '/Applications/UninstallHelmhost.app' '/Applications/Uninstall Helmhost.app'" with administrator privileges
 
 display dialog "Helmhost was removed. User data in ~/.helmhost was kept." buttons {"OK"} default button "OK"
 APPLESCRIPT
