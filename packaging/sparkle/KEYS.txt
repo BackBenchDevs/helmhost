@@ -1,0 +1,16 @@
+# Update-signing keys (do not commit private keys).
+#
+# macOS / Sparkle — Ed25519 (EdDSA)
+#   Public:  apps/client/macos/Runner/Info.plist → SUPublicEDKey
+#            packaging/sparkle/SUPublicEDKey.txt
+#   Secret:  GitHub Actions SPARKLE_ED_PRIVATE_KEY
+#            (contents of packaging/sparkle/ed25519_priv.key — gitignored)
+#
+# Windows / WinSparkle 0.8 — DSA-4096 (library only supports DSA+SHA1)
+#   Public:  apps/client/windows/dsa_pub.pem (+ Runner.rc DSAPub)
+#   Secret:  GitHub Actions WINSPARKLE_DSA_PRIVATE_KEY
+#            (contents of packaging/winsparkle/dsa_priv.pem — gitignored)
+#
+# Feed URLs:
+#   stable → https://backbenchdevs.github.io/helmhost/appcast.xml
+#   rcs    → https://backbenchdevs.github.io/helmhost/appcast-rcs.xml

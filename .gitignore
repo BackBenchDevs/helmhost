@@ -51,7 +51,11 @@ tools/
 .env.*
 !.env.example
 *.pem
+!apps/client/windows/dsa_pub.pem
+!packaging/winsparkle/dsa_pub.pem
 *.p12
+packaging/sparkle/*.key
+packaging/winsparkle/dsa_priv.pem
 credentials.json
 
 # FRB / codegen
@@ -65,6 +69,9 @@ credentials.json
 
 # Packaged builds
 dist/
+
+# License inventory (regenerate via scripts/generate_third_party_notices.sh)
+apps/client/assets/legal/THIRD_PARTY_NOTICES.generated.md
 
 # Local Flutter SDK + build artifacts
 tools/

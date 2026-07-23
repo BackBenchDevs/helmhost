@@ -5,6 +5,7 @@ on:
     branches: [main, master]
     paths:
       - "docs/**"
+      - "docs/appcast/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -28,6 +29,11 @@ jobs:
           sudo mv mdbook /usr/local/bin/
       - name: Build
         run: mdbook build docs
+      - name: Include appcast feeds
+        run: |
+          mkdir -p docs/book
+          cp -f docs/appcast/appcast.xml docs/book/appcast.xml
+          cp -f docs/appcast/appcast-rcs.xml docs/book/appcast-rcs.xml
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/book
