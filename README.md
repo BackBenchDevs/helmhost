@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="apps/client/assets/brand/helmhost-icon-256.png" alt="Helmhost" width="128">
+</p>
+
 # Helmhost
 
 Multi-session RFB / VNC viewer — Flutter desktop UI + Rust protocol engine.
