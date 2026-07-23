@@ -6,7 +6,7 @@ default-members = ["crates/core", "crates/rfb", "crates/ffi"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "GPL-2.0-or-later"
+license = "LicenseRef-BackBenchDevs-Proprietary"
 
 [workspace.dependencies]
 helmhost-core = { path = "crates/core" }

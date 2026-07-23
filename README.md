@@ -1,8 +1,15 @@
 # Helmhost
 
-Open multi-session RFB / VNC viewer — Flutter desktop UI + Rust protocol engine (GPL-2.0-or-later).
+Multi-session RFB / VNC viewer — Flutter desktop UI + Rust protocol engine.
 
 [![CI](https://github.com/BackBenchDevs/helmhost/actions/workflows/ci.yml/badge.svg)](https://github.com/BackBenchDevs/helmhost/actions/workflows/ci.yml)
+[![Docs](https://github.com/BackBenchDevs/helmhost/actions/workflows/pages.yml/badge.svg)](https://backbenchdevs.github.io/helmhost/)
+[![Release](https://img.shields.io/github/v/release/BackBenchDevs/helmhost?include_prereleases&sort=semver)](https://github.com/BackBenchDevs/helmhost/releases)
+[![Stars](https://img.shields.io/github/stars/BackBenchDevs/helmhost?style=flat)](https://github.com/BackBenchDevs/helmhost/stargazers)
+[![License](https://img.shields.io/badge/license-Proprietary-red)](./LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](./README.md)
+
+**License:** proprietary — [BackBenchDevs Proprietary Software License](./LICENSE). All rights reserved. Contributions require the [CLA](./CLA.md).
 
 ## Quick start (macOS)
 
@@ -34,11 +41,11 @@ Do **not** hand-edit version in `Cargo.toml` / `pubspec.yaml`. Details: [docs/sr
 
 | Host | Portable | Installable (upgradeable) |
 |------|----------|---------------------------|
-| macOS | `.zip` (`.app`) | `.pkg` (`dev.helmhost.client`) |
+| macOS | `.zip` (`.app`) | `.pkg` (`com.bbdevs.helmhost`) |
 | Linux | `.tar.gz` | `.deb` (package `helmhost`) |
 | Windows | `.zip` | `-setup.exe` (Inno, fixed AppId) |
 
-Windows local: install [Inno Setup 6](https://jrsoftware.org/isinfo.php) so `ISCC.exe` is on PATH.  
+Windows local: install [Inno Setup 6](https://jrsoftware.org/isinfo.php) so `ISCC.exe` is on PATH.
 Dev/debug portable only: `./scripts/build_dev.sh`.
 
 ## Tests / CI locally
@@ -72,11 +79,16 @@ Repo: **[BackBenchDevs/helmhost](https://github.com/BackBenchDevs/helmhost)** (`
    ```
    Release assets include packages + **SHA256SUMS** / `*.sha256` digests.
 
+## Contributing
+
+Pull requests and other contributions are welcome under the [Contributor License Agreement](./CLA.md). By submitting a contribution you agree to those terms (IP assigns to BackBenchDevs).
+
 ## Docs
 
 - Changelog: [CHANGELOG.md](./CHANGELOG.md)
 - Public book: `docs/` (GitHub Pages via Actions)
 - Releases: GitHub Releases
+- License: [LICENSE](./LICENSE) · CLA: [CLA.md](./CLA.md) · Open carve-outs: [OPEN_COMPONENTS.md](./OPEN_COMPONENTS.md)
 
 ## Layout
 

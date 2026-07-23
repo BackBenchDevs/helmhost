@@ -1,0 +1,92 @@
+BackBenchDevs Proprietary Software License
+Version 0.1 — Helmhost
+
+Copyright (c) 2026 BackBenchDevs. All rights reserved.
+
+IMPORTANT: This is proprietary software. Access to source code does not
+grant ownership or redistribution rights.
+
+1. Definitions
+   "Software" means Helmhost and related materials (source, binaries,
+   documentation, assets, architecture, and core engines including but not
+   limited to the Rust crates and Flutter application) provided by
+   BackBenchDevs ("Licensor").
+   "You" means an individual or entity exercising rights under this License.
+   "Contribution" means any code, patch, issue, documentation, or other
+   material You submit to Licensor for inclusion in the Software.
+
+2. Grant of rights (limited)
+   Subject to this License, Licensor grants You a non-exclusive,
+   non-transferable, revocable license to:
+   (a) use the Software for personal or internal business purposes;
+   (b) build, run, and modify the Software for those purposes;
+   (c) submit Contributions to Licensor under the Contributor License
+       Agreement (CLA.md).
+
+   No other rights are granted. All rights not expressly granted are
+   reserved by Licensor.
+
+3. Restrictions (no redistribution)
+   You may NOT, without prior written permission from Licensor:
+   (a) distribute, publish, sublicense, sell, lease, or otherwise make
+       the Software (source or binary) available to third parties;
+   (b) host public mirrors, forks, or derivative works for others to obtain;
+   (c) remove or alter copyright, license, or proprietary notices;
+   (d) use the Software to provide a competing hosted or productized
+       offering that redistributes or exposes Licensor's proprietary source.
+
+   Private forks for Your own use are allowed only if they remain private
+   and are not shared outside Your organization.
+
+   Official binaries and installers published by BackBenchDevs may be
+   downloaded and used under this License; that does not grant You the
+   right to re-publish or redistribute those binaries.
+
+4. Intellectual property
+   The Software, including its architecture, core engines, and products
+   built on them by Licensor, remains the exclusive property of Licensor.
+   Viewing or possessing source does not transfer ownership.
+   Feedback and Contributions do not create joint ownership unless
+   Licensor agrees in a separate signed writing.
+
+5. Contributions (inbound assignment / license)
+   By submitting a Contribution, You agree to CLA.md. In summary, You:
+   (a) represent that You have the right to submit it;
+   (b) irrevocably assign to Licensor all right, title, and interest in
+       the Contribution (or, if assignment is not permitted by law,
+       grant Licensor a perpetual, worldwide, royalty-free, exclusive
+       license to use, modify, sublicense, and commercialize it); and
+   (c) waive any claim against Licensor arising from use of the Contribution.
+
+6. Optional open components
+   Licensor may designate specific files, crates, or directories as
+   "Open Components" under a separate open-source license (for example
+   MIT or Apache-2.0). Those designations, if any, are listed in
+   OPEN_COMPONENTS.md. Open Components are licensed only as stated there;
+   everything else remains under this License.
+
+7. Trademarks
+   This License does not grant rights to use "Helmhost", "BackBenchDevs",
+   or related marks except as needed to describe unmodified Software
+   obtained from Licensor.
+
+8. Third-party software
+   The Software may include third-party open-source components under their
+   own licenses. Those components are not licensed under this License.
+   Required notices are provided in THIRD_PARTY_NOTICES (shipped with
+   the product and/or in the source repository).
+
+9. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, LICENSOR DISCLAIMS ALL
+   WARRANTIES AND LIABILITY FOR DAMAGES ARISING FROM USE OF THE SOFTWARE.
+
+10. Termination
+    This License terminates automatically if You breach it.
+    Upon termination You must stop using the Software and destroy copies,
+    except as required by law. Sections 4–9 survive termination.
+
+11. Governing law
+    This License is governed by the laws of India, excluding conflict-of-law
+    rules. Courts in India have exclusive jurisdiction over disputes arising
+    under this License, subject to mandatory consumer-protection laws.

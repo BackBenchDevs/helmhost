@@ -14,4 +14,4 @@ This site is the **public** docs tree. Local planning notes may live under `plan
 | **rcs** | Tag `vX.Y.Z-rc.N` | zip/tar + `.pkg` / `.deb` / `-setup.exe` |
 | **stable** | Tag `vX.Y.Z` via `./scripts/hh-version` | same as rcs |
 
-Installers are upgradeable (same macOS pkg id / deb name / Inno AppId). Docs site: GitHub Pages from `docs/` (Actions).
+Installers are upgradeable (macOS pkg `com.bbdevs.helmhost` / deb `helmhost` / fixed Inno AppId). Docs site: GitHub Pages from `docs/` (Actions).
