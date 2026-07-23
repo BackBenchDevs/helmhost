@@ -19,7 +19,7 @@ const TIGHT_EXPLICIT_FILTER: u8 = 0x04;
 const FILTER_COPY: u8 = 0;
 const FILTER_PALETTE: u8 = 1;
 
-/// Four per-connection zlib inflate streams (TigerVNC: streams 0-3).
+/// Four persistent zlib inflate streams (Tight `comp_ctl` reset mask bits 0–3).
 pub struct TightStream {
     streams: [Decompress; 4],
 }
@@ -160,7 +160,13 @@ where
 // --- helpers ---
 
 fn is_888(pf: &PixelFormat) -> bool {
-    pf.bits_per_pixel == 32 && pf.true_colour && pf.depth <= 24
+    // Tight basic/fill path: 32bpp true-colour depth-24 uses packed RGB24 on the wire.
+    pf.bits_per_pixel == 32
+        && pf.true_colour
+        && pf.depth == 24
+        && pf.red_max == 255
+        && pf.green_max == 255
+        && pf.blue_max == 255
 }
 
 fn reset_streams(streams: &mut TightStream, mask: u8) {
@@ -197,44 +203,86 @@ fn bpp_to_rgba(pf: &PixelFormat, pixels: &[u8]) -> Vec<u8> {
     out
 }
 
-fn inflate_stream(decompress: &mut Decompress, compressed: &[u8]) -> Result<Vec<u8>, String> {
-    let mut out = Vec::with_capacity(compressed.len().saturating_mul(4).max(256));
+/// Inflate one Tight zlib payload to exactly `expected_len` uncompressed bytes.
+fn inflate_once(
+    decompress: &mut Decompress,
+    compressed: &[u8],
+    expected_len: usize,
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(expected_len.max(256));
     let mut remaining = compressed;
 
     while !remaining.is_empty() {
+        let before_in = decompress.total_in();
+        let before_len = out.len();
         if out.capacity().saturating_sub(out.len()) < 4096 {
             out.reserve(64 * 1024);
         }
-        let before_in = decompress.total_in();
         let status = decompress
             .decompress_vec(remaining, &mut out, FlushDecompress::Sync)
             .map_err(|e| format!("tight inflate: {e}"))?;
         let consumed = (decompress.total_in() - before_in) as usize;
-        if consumed == 0 {
+
+        if consumed == 0 && out.len() == before_len {
             if matches!(status, Status::BufError) {
                 out.reserve(64 * 1024);
                 continue;
             }
             return Err("tight inflate: stalled".into());
         }
-        remaining = &remaining[consumed..];
+        remaining = &remaining[consumed.min(remaining.len())..];
         if matches!(status, Status::StreamEnd) {
+            if !remaining.is_empty() {
+                return Err("tight inflate: stream ended with input left".into());
+            }
             break;
         }
     }
+
+    // Drain Sync-flushed output with no further input.
     loop {
-        let before = out.len();
+        if out.len() >= expected_len {
+            break;
+        }
+        let before_len = out.len();
         if out.capacity().saturating_sub(out.len()) < 4096 {
             out.reserve(64 * 1024);
         }
         let status = decompress
             .decompress_vec(&[], &mut out, FlushDecompress::Sync)
             .map_err(|e| format!("tight inflate drain: {e}"))?;
-        if out.len() == before || matches!(status, Status::StreamEnd) {
+        if out.len() == before_len || matches!(status, Status::StreamEnd) {
             break;
         }
     }
+
+    if out.len() < expected_len {
+        return Err(format!(
+            "tight inflate: short output (got {}, need {expected_len})",
+            out.len()
+        ));
+    }
+    out.truncate(expected_len);
     Ok(out)
+}
+
+/// Inflate with one reset+retry if the persistent stream is desynced.
+fn inflate_stream(
+    streams: &mut TightStream,
+    stream_idx: usize,
+    compressed: &[u8],
+    expected_len: usize,
+) -> Result<Vec<u8>, String> {
+    match inflate_once(&mut streams.streams[stream_idx], compressed, expected_len) {
+        Ok(out) => Ok(out),
+        Err(first) => {
+            streams.streams[stream_idx] = Decompress::new(true);
+            match inflate_once(&mut streams.streams[stream_idx], compressed, expected_len) {
+                Ok(out) => Ok(out),
+                Err(second) => Err(format!("{first}; reset retry: {second}")),
+            }
+        }
+    }
 }
 
 async fn read_u8<R: AsyncRead + Unpin>(rd: &mut R) -> Result<u8, String> {
@@ -269,7 +317,7 @@ async fn read_tight_pixels<R: AsyncRead + Unpin>(
     } else {
         let zlen = read_compact_async(rd).await?;
         let zdata = read_exact(rd, zlen).await?;
-        inflate_stream(&mut streams.streams[stream_idx], &zdata)
+        inflate_stream(streams, stream_idx, &zdata, data_size)
     }
 }
 
@@ -363,10 +411,7 @@ fn read_tight_pixels_sync(
         if body.len() < zstart + zlen {
             return Err("tight zlib data truncated".into());
         }
-        inflate_stream(
-            &mut streams.streams[stream_idx],
-            &body[zstart..zstart + zlen],
-        )
+        inflate_stream(streams, stream_idx, &body[zstart..zstart + zlen], data_size)
     }
 }
 
@@ -554,5 +599,90 @@ mod tests {
         let body = [0x00u8, 0xAA, 0xBB, 0xCC]; // comp_ctl + 3 RGB bytes
         let out = decode_tight_body(&mut streams, &pf(), 1, 1, &body).unwrap();
         assert_eq!(&out, &[0xAA, 0xBB, 0xCC, 0xFF]);
+    }
+
+    fn zlib_sync(data: &[u8]) -> Vec<u8> {
+        use flate2::{Compress, Compression, FlushCompress};
+        let mut c = Compress::new(Compression::default(), true);
+        let mut out = Vec::new();
+        let mut input = data;
+        while !input.is_empty() {
+            let before = c.total_in();
+            c.compress_vec(input, &mut out, FlushCompress::Sync)
+                .unwrap();
+            let consumed = (c.total_in() - before) as usize;
+            if consumed == 0 {
+                out.reserve(1024);
+                continue;
+            }
+            input = &input[consumed..];
+        }
+        loop {
+            let before = out.len();
+            c.compress_vec(&[], &mut out, FlushCompress::Sync).unwrap();
+            if out.len() == before {
+                break;
+            }
+        }
+        out
+    }
+
+    fn encode_compact(len: usize) -> Vec<u8> {
+        if len < 128 {
+            vec![len as u8]
+        } else if len < 16384 {
+            vec![0x80 | (len as u8 & 0x7F), ((len >> 7) as u8) & 0x7F]
+        } else {
+            vec![
+                0x80 | (len as u8 & 0x7F),
+                0x80 | (((len >> 7) as u8) & 0x7F),
+                (len >> 14) as u8,
+            ]
+        }
+    }
+
+    #[test]
+    fn basic_copy_zlib_exact_size() {
+        // 2x2 RGB = 12 bytes → compressed path
+        let pixels = [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let z = zlib_sync(&pixels);
+        let mut body = vec![0x00u8]; // basic stream 0, copy
+        body.extend(encode_compact(z.len()));
+        body.extend_from_slice(&z);
+
+        let mut streams = TightStream::new();
+        let out = decode_tight_body(&mut streams, &pf(), 2, 2, &body).unwrap();
+        assert_eq!(out.len(), 16);
+        assert_eq!(&out[0..4], &[0, 1, 2, 255]);
+        assert_eq!(&out[12..16], &[9, 10, 11, 255]);
+    }
+
+    #[test]
+    fn inflate_recovers_after_stream_desync() {
+        let pixels = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+        let z = zlib_sync(&pixels);
+
+        let mut streams = TightStream::new();
+        // Poison stream 0 with a finished zlib stream so next inflate would stall.
+        {
+            use flate2::{Compress, Compression, FlushCompress};
+            let mut c = Compress::new(Compression::default(), true);
+            let mut finished = Vec::new();
+            c.compress_vec(b"poison", &mut finished, FlushCompress::Finish)
+                .unwrap();
+            let _ = inflate_once(&mut streams.streams[0], &finished, 6);
+        }
+
+        // Same payload via inflate_stream should reset+retry and succeed.
+        let out = inflate_stream(&mut streams, 0, &z, pixels.len()).unwrap();
+        assert_eq!(out, pixels);
+    }
+
+    #[test]
+    fn is_888_requires_depth_24() {
+        let mut bad = pf();
+        bad.depth = 16;
+        assert!(!is_888(&bad));
+        assert!(is_888(&pf()));
     }
 }
