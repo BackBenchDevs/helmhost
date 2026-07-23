@@ -48,6 +48,7 @@ class SessionPage extends StatefulWidget {
     this.onOverviewChanged,
     this.bridge,
     this.credentials,
+    this.suppressRemoteResize = false,
     ILogger? logger,
   }) : logger = logger ?? defaultLogger(module: 'session');
 
@@ -71,6 +72,8 @@ class SessionPage extends StatefulWidget {
   /// Injected for tests; production opens native FFI in [initState].
   final IHelmBridge? bridge;
   final ICredentialStore? credentials;
+  /// Skip SetDesktopSize (library overlay open / collapse settle).
+  final bool suppressRemoteResize;
   final ILogger logger;
 
   @override
@@ -172,6 +175,20 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sessionId != widget.sessionId) {
       _sessionId = widget.sessionId;
+    }
+    if (oldWidget.suppressRemoteResize != widget.suppressRemoteResize) {
+      if (widget.suppressRemoteResize) {
+        _resizeDebounce?.cancel();
+        _resizeDebounce = null;
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || widget.suppressRemoteResize) return;
+          final box = _viewKey.currentContext?.findRenderObject() as RenderBox?;
+          if (box != null && box.hasSize) {
+            _onViewSize(box.size);
+          }
+        });
+      }
     }
     if (oldWidget.active == widget.active) return;
     if (widget.active) {
@@ -535,13 +552,10 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   Future<void> _setScaleMode(ViewScaleMode m) async {
     setState(() => _scaleMode = m);
     await widget.prefs?.setViewScaleMode(m);
-    if (m.usesRemoteResize) {
-      _scheduleRemoteResize();
-    }
   }
 
   void _onViewSize(Size size) {
-    if (!_scaleMode.usesRemoteResize) return;
+    if (widget.suppressRemoteResize) return;
     final w = size.width.round();
     final h = size.height.round();
     if (w <= 0 || h <= 0) return;
@@ -552,10 +566,10 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   }
 
   void _scheduleRemoteResize() {
-    if (!_scaleMode.usesRemoteResize) return;
+    if (widget.suppressRemoteResize) return;
     _resizeDebounce?.cancel();
     _resizeDebounce = Timer(const Duration(milliseconds: 100), () {
-      if (!mounted || !_scaleMode.usesRemoteResize) return;
+      if (!mounted || widget.suppressRemoteResize) return;
       final box = _viewKey.currentContext?.findRenderObject() as RenderBox?;
       if (box == null || !box.hasSize) return;
       final w = box.size.width.round();

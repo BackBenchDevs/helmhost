@@ -26,6 +26,7 @@ class TabSessionWorkspace extends StatelessWidget {
     required this.activeSessionId,
     required this.prefs,
     this.paused = false,
+    this.suppressRemoteResize = false,
     this.onOverviewChanged,
     this.bridge,
     this.credentials,
@@ -36,6 +37,8 @@ class TabSessionWorkspace extends StatelessWidget {
   final AppPrefs? prefs;
   /// When true (Library overlay open), pause tickers / mark inactive.
   final bool paused;
+  /// Skip SetDesktopSize while Library overlay is open or settling.
+  final bool suppressRemoteResize;
   final void Function(int sessionId, SessionOverviewData data)?
       onOverviewChanged;
   final IHelmBridge? bridge;
@@ -62,6 +65,7 @@ class TabSessionWorkspace extends StatelessWidget {
               profileId: s.profileId,
               closeOnExit: false,
               active: !paused && s.id == activeSessionId,
+              suppressRemoteResize: suppressRemoteResize,
               prefs: prefs,
               bandwidthPreset: s.bandwidthPreset,
               qualityLevel: s.qualityLevel,
