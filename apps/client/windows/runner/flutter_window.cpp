@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "desktop_multi_window/desktop_multi_window_plugin.h"
 #include "flutter/generated_plugin_registrant.h"
 #include "helmhost_about.h"
 #include "resource.h"
@@ -24,6 +25,13 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  // Secondary engines from desktop_multi_window need their own plugin set;
+  // without this, session windows stay blank (window_manager MissingPlugin).
+  DesktopMultiWindowSetWindowCreatedCallback([](void *controller) {
+    auto *flutter_view_controller =
+        reinterpret_cast<flutter::FlutterViewController *>(controller);
+    RegisterPlugins(flutter_view_controller->engine());
+  });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   HelmhostAbout::Attach(flutter_controller_->engine()->messenger(), GetHandle());
