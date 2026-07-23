@@ -78,6 +78,41 @@ jobs:
             ./scripts/assert_ffi_in_artifact.sh "$f"
           done
           ls -la dist/${HELMHOST_CHANNEL}/
+      - name: Sign macOS zip (Ed25519)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HELMHOST_CHANNEL: ${{ steps.meta.outputs.channel }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${SPARKLE_ED_PRIVATE_KEY}" ]]; then
+            echo "warning: SPARKLE_ED_PRIVATE_KEY secret missing — skip sign" >&2
+            exit 0
+          fi
+          chmod +x scripts/sign_update_macos.sh
+          (cd apps/client/macos && pod install)
+          KEY="$(mktemp)"
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" >"$KEY"
+          ZIP="$(ls dist/${HELMHOST_CHANNEL}/helmhost-*-macos-*.zip | head -1)"
+          ./scripts/sign_update_macos.sh "$ZIP" "$KEY" | tee dist/${HELMHOST_CHANNEL}/macos.edsig
+          rm -f "$KEY"
+      - name: Sign Windows setup (DSA-4096)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          HELMHOST_CHANNEL: ${{ steps.meta.outputs.channel }}
+          WINSPARKLE_DSA_PRIVATE_KEY: ${{ secrets.WINSPARKLE_DSA_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${WINSPARKLE_DSA_PRIVATE_KEY}" ]]; then
+            echo "warning: WINSPARKLE_DSA_PRIVATE_KEY secret missing — skip sign" >&2
+            exit 0
+          fi
+          chmod +x scripts/sign_update_windows.sh
+          KEY="$(mktemp)"
+          printf '%s\n' "$WINSPARKLE_DSA_PRIVATE_KEY" >"$KEY"
+          SETUP="$(ls dist/${HELMHOST_CHANNEL}/helmhost-*-windows-*-setup.exe | head -1)"
+          ./scripts/sign_update_windows.sh "$SETUP" "$KEY" | tee dist/${HELMHOST_CHANNEL}/windows.dsasig
+          rm -f "$KEY"
       - uses: actions/upload-artifact@v4
         with:
           name: helmhost-${{ steps.meta.outputs.channel }}-${{ runner.os }}
@@ -91,24 +126,58 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Collect files + merged digests
+      - name: Collect files + appcast + digests
         id: files
         shell: bash
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: |
+          chmod +x scripts/*.sh scripts/hh-version
           mkdir -p release-assets
           find artifacts -type f \( \
             -name '*.zip' -o -name '*.tar.gz' -o \
             -name '*.pkg' -o -name '*.deb' -o -name '*-setup.exe' -o \
-            -name 'SHA256SUMS' -o -name '*.sha256' \
+            -name 'SHA256SUMS' -o -name '*.sha256' -o \
+            -name 'macos.edsig' -o -name 'windows.dsasig' \
           \) -print | while read -r f; do
             cp -f "$f" "release-assets/$(basename "$f")"
           done
-          # One combined digest file for the whole release (recompute from copies)
-          chmod +x scripts/write_digests.sh
-          # Drop per-OS SHA256SUMS copies so we rewrite a single merged file
-          rm -f release-assets/SHA256SUMS
+
+          TAG="${GITHUB_REF_NAME}"
+          VER="$(tr -d '[:space:]' <VERSION)"
+          if [[ "$TAG" == *-rc.* ]]; then
+            CHANNEL=rcs
+            FEED=appcast-rcs.xml
+          else
+            CHANNEL=stable
+            FEED=appcast.xml
+          fi
+
+          MAC_ZIP="$(ls release-assets/helmhost-*-macos-*.zip 2>/dev/null | head -1 || true)"
+          WIN_SETUP="$(ls release-assets/helmhost-*-windows-*-setup.exe 2>/dev/null | head -1 || true)"
+          MAC_ED_SIG=""
+          WIN_DSA_SIG=""
+          if [[ -f release-assets/macos.edsig ]]; then
+            MAC_ED_SIG="$(awk '{print $1}' release-assets/macos.edsig)"
+          fi
+          if [[ -f release-assets/windows.dsasig ]]; then
+            WIN_DSA_SIG="$(tr -d '[:space:]' <release-assets/windows.dsasig)"
+          fi
+
+          CHANNEL="$CHANNEL" VERSION="$VER" BUILD="${GITHUB_RUN_NUMBER}" TAG="$TAG" \
+            MAC_ZIP="${MAC_ZIP}" MAC_ED_SIG="${MAC_ED_SIG}" \
+            WIN_SETUP="${WIN_SETUP}" WIN_DSA_SIG="${WIN_DSA_SIG}" \
+            OUT="release-assets/${FEED}" \
+            ./scripts/generate_appcast.sh
+
+          cp -f "release-assets/${FEED}" "docs/appcast/${FEED}"
+
+          rm -f release-assets/SHA256SUMS release-assets/macos.edsig release-assets/windows.dsasig
           ./scripts/write_digests.sh release-assets
           ls -la release-assets
+          echo "feed=${FEED}" >> "$GITHUB_OUTPUT"
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
           echo "count=$(find release-assets -type f | wc -l)" >> "$GITHUB_OUTPUT"
       - name: Channel
         id: meta
@@ -127,3 +196,15 @@ jobs:
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit appcast for Pages
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/appcast/
+          if git diff --cached --quiet; then
+            echo "appcast unchanged"
+          else
+            git commit -m "chore(release): update appcast for ${GITHUB_REF_NAME}"
+            git push origin HEAD:master
+          fi
