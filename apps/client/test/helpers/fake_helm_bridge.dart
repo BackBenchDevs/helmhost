@@ -98,8 +98,12 @@ class FakeHelmBridge implements IHelmBridge {
   @override
   void sendClipboard(int sessionId, String text) {}
 
+  final List<(int, int, int)> desktopSizes = [];
+
   @override
-  void requestDesktopSize(int sessionId, int width, int height) {}
+  void requestDesktopSize(int sessionId, int width, int height) {
+    desktopSizes.add((sessionId, width, height));
+  }
 
   @override
   void close(int sessionId) {

@@ -272,8 +272,8 @@ enum ViewScaleMode {
 }
 
 extension ViewScaleModeX on ViewScaleMode {
-  /// Fit (aspect) = local letterbox only (TigerVNC FixedRatio / no RemoteResize).
-  /// Fill window = TigerVNC RemoteResize: remote FB matches viewport; paint 1:1 (never stretch).
+  /// Local paint only. Remote FB size always follows the window (SetDesktopSize),
+  /// except while the Library overlay is open or settling after collapse.
   String get label {
     switch (this) {
       case ViewScaleMode.fit:
@@ -295,14 +295,15 @@ extension ViewScaleModeX on ViewScaleMode {
   static ViewScaleMode fromPrefs(String? v) {
     switch (v) {
       case 'fill':
-      case 'oneToOne': // legacy → Fill window (RemoteResize)
+      case 'oneToOne': // legacy → Fill window
         return ViewScaleMode.fill;
       default:
         return ViewScaleMode.fit;
     }
   }
 
-  /// Local paint transform. Fill uses contain until remote size matches (never stretch).
+  /// Local paint transform. Both modes use contain until remote size matches
+  /// (never stretch). Remote resize is independent of this preference.
   BoxFit get boxFit {
     switch (this) {
       case ViewScaleMode.fit:
@@ -311,6 +312,17 @@ extension ViewScaleModeX on ViewScaleMode {
     }
   }
 
+  /// Short status-menu description (remote size follows the window either way).
+  String get menuHint {
+    switch (this) {
+      case ViewScaleMode.fit:
+        return 'letterbox locally until FB matches';
+      case ViewScaleMode.fill:
+        return 'prefer matched remote size (no stretch)';
+    }
+  }
+
+  /// Deprecated for resize gating — remote resize always follows window size.
   bool get usesRemoteResize => this == ViewScaleMode.fill;
 }
 

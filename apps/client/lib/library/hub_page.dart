@@ -84,6 +84,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
   String? _profileFilterId; // null = all
   int? _activeTabSessionId;
   var _libraryOverlayOpen = true;
+  /// Suppress SetDesktopSize briefly after Library overlay collapse.
+  var _overlayResizeSettle = false;
+  Timer? _overlayResizeSettleTimer;
   final _tabOverviews = <int, SessionOverviewData>{};
 
   @override
@@ -187,6 +190,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
   void dispose() {
     windowManager.removeListener(this);
     _liveTimer?.cancel();
+    _overlayResizeSettleTimer?.cancel();
     _search.dispose();
     super.dispose();
   }
@@ -1450,9 +1454,25 @@ class _HubPageState extends State<HubPage> with WindowListener {
     );
   }
 
+  void _armOverlayResizeSettle() {
+    _overlayResizeSettleTimer?.cancel();
+    _overlayResizeSettle = true;
+    _overlayResizeSettleTimer = Timer(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
+      setState(() => _overlayResizeSettle = false);
+    });
+  }
+
   void _setLibraryOverlayOpen(bool open) {
     setState(() {
+      final closing = _libraryOverlayOpen && !open;
       _libraryOverlayOpen = open;
+      if (closing) {
+        _armOverlayResizeSettle();
+      } else if (open) {
+        _overlayResizeSettleTimer?.cancel();
+        _overlayResizeSettle = false;
+      }
       if (open) {
         _sessions.applyTabGrabPolicy(activeId: null, wantGrab: false);
         try {
@@ -1475,6 +1495,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
 
   void _selectTab(int id) {
     setState(() {
+      if (_libraryOverlayOpen) {
+        _armOverlayResizeSettle();
+      }
       _libraryOverlayOpen = false;
       _activeTabSessionId = id;
       _sessions.applyTabGrabPolicy(activeId: id);
@@ -1558,6 +1581,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
             activeSessionId: _activeTabSessionId,
             prefs: widget.prefs,
             paused: overlay,
+            suppressRemoteResize: overlay || _overlayResizeSettle,
             onOverviewChanged: _onTabOverview,
             bridge: _bridge,
             credentials: _credentials,

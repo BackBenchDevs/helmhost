@@ -145,7 +145,7 @@ class SessionStatusBar extends StatelessWidget {
           value: mode,
           checked: mode == scaleMode,
           child: Text(
-            '${mode.label} — ${mode == ViewScaleMode.fit ? 'letterbox locally' : 'resize remote desktop'}',
+            '${mode.label} — ${mode.menuHint}',
           ),
         ),
       if (onAutoReconnectChanged != null)
@@ -240,7 +240,7 @@ class SessionStatusBar extends StatelessWidget {
               ),
               PopupMenuButton<ViewScaleMode>(
                 tooltip:
-                    'Fit = letterbox locally. Fill window = resize remote desktop.',
+                    'Local paint. Remote desktop size follows the window.',
                 padding: EdgeInsets.zero,
                 onSelected: onScaleChanged,
                 itemBuilder: (context) => [

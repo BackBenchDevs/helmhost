@@ -143,6 +143,9 @@ void main() {
       expect(ViewScaleMode.fill.prefsKey, 'fill');
       expect(ViewScaleMode.fit.boxFit, BoxFit.contain);
       expect(ViewScaleMode.fill.boxFit, BoxFit.contain);
+      expect(ViewScaleMode.fit.menuHint, contains('letterbox'));
+      expect(ViewScaleMode.fill.menuHint, contains('matched remote'));
+      // Legacy flag retained; resize no longer gated by scale mode.
       expect(ViewScaleMode.fill.usesRemoteResize, isTrue);
       expect(ViewScaleMode.fit.usesRemoteResize, isFalse);
     });
