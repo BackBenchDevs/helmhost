@@ -10,6 +10,35 @@ void main() {
     });
   });
 
+  group('expandPartialHost / shortHost', () {
+    test('ava1.bec under bec.broadcom.net', () {
+      expect(
+        expandPartialHost('ava1.bec', 'bec.broadcom.net'),
+        'ava1.bec.broadcom.net',
+      );
+      expect(shortHost('ava1.bec', 'bec.broadcom.net'), 'ava1');
+      expect(
+        qualifyHost('ava1.bec', 'bec.broadcom.net'),
+        'ava1.bec.broadcom.net',
+      );
+    });
+
+    test('full FQDN unchanged', () {
+      expect(
+        expandPartialHost('ava1.bec.broadcom.net', 'bec.broadcom.net'),
+        isNull,
+      );
+      expect(
+        shortHost('ava1.bec.broadcom.net', 'bec.broadcom.net'),
+        'ava1',
+      );
+    });
+
+    test('unrelated suffix does not match', () {
+      expect(expandPartialHost('vnc.box', 'bec.broadcom.net'), isNull);
+    });
+  });
+
   group('displayNameFromHost / effectiveDisplayName', () {
     test('FQDN and hyphen Title Case', () {
       expect(displayNameFromHost('grog.bec.broadcom.net'), 'Grog');
@@ -313,6 +342,41 @@ void main() {
       expect(r.error, isNull);
       expect(r.target!.intent, QuickConnectIntent.needGroupPick);
       expect(r.target!.connectHost, 'vnc.box');
+    });
+
+    test('partial domain expands and confirms Add to group', () {
+      const brcm = ConnectionProfileCard(
+        id: 'brcm',
+        name: 'BRCM',
+        domain: 'bec.broadcom.net',
+      );
+      final r = resolveQuickConnect(
+        rawInput: 'ava1.bec',
+        profiles: const [brcm],
+      );
+      expect(r.error, isNull);
+      expect(r.target!.intent, QuickConnectIntent.confirmAddToGroup);
+      expect(r.target!.connectHost, 'ava1.bec.broadcom.net');
+      expect(r.target!.entryHost, 'ava1');
+      expect(r.target!.profileId, 'brcm');
+    });
+
+    test('partial domain with named filter expands silently', () {
+      const brcm = ConnectionProfileCard(
+        id: 'brcm',
+        name: 'BRCM',
+        domain: 'bec.broadcom.net',
+      );
+      final r = resolveQuickConnect(
+        rawInput: 'ava2.bec:1',
+        profiles: const [brcm],
+        filterProfileId: 'brcm',
+      );
+      expect(r.error, isNull);
+      expect(r.target!.intent, QuickConnectIntent.ready);
+      expect(r.target!.connectHost, 'ava2.bec.broadcom.net');
+      expect(r.target!.entryHost, 'ava2');
+      expect(r.target!.port, 5901);
     });
 
     test('named profile qualifies short host', () {

@@ -570,6 +570,60 @@ bool hostMatchesDomain(String host, String domain) {
   return h == d || h.endsWith('.$d');
 }
 
+List<String> _dnsLabels(String value) => normalizeDomain(value)
+    .split('.')
+    .where((p) => p.isNotEmpty)
+    .toList();
+
+/// When [host] ends with a *proper prefix* of [domain], return the local
+/// labels before that prefix (may be empty if host is only the prefix).
+///
+/// `ava1.bec` + `bec.broadcom.net` → `ava1`
+/// `ava1.bec.broadcom` + `bec.broadcom.net` → `ava1`
+/// Full-domain hosts return null (use [hostMatchesDomain] / [shortHost]).
+String? partialDomainLocalHost(String host, String domain) {
+  final hLabels = _dnsLabels(host);
+  final dLabels = _dnsLabels(domain);
+  if (hLabels.length < 2 || dLabels.length < 2) return null;
+  if (hostMatchesDomain(host, domain)) return null;
+
+  // Largest N where host suffix == domain prefix and N < domain length.
+  var bestN = 0;
+  final maxN = hLabels.length < dLabels.length
+      ? hLabels.length
+      : dLabels.length - 1;
+  for (var n = 1; n <= maxN; n++) {
+    final hostSuffix = hLabels.sublist(hLabels.length - n);
+    final domainPrefix = dLabels.sublist(0, n);
+    if (_labelsEqual(hostSuffix, domainPrefix)) bestN = n;
+  }
+  if (bestN == 0) return null;
+  final local = hLabels.sublist(0, hLabels.length - bestN);
+  return local.join('.');
+}
+
+bool _labelsEqual(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+/// Expand partial host under [domain], or null if not a partial match.
+///
+/// `ava1.bec` + `bec.broadcom.net` → `ava1.bec.broadcom.net`
+String? expandPartialHost(String host, String domain) {
+  final local = partialDomainLocalHost(host, domain);
+  if (local == null) return null;
+  final d = normalizeDomain(domain);
+  if (local.isEmpty) return d;
+  return '$local.$d';
+}
+
+bool hostPartiallyMatchesDomain(String host, String domain) =>
+    expandPartialHost(host, domain) != null;
+
 String shortHost(String host, String domain) {
   final h = host.trim();
   final d = normalizeDomain(domain);
@@ -578,6 +632,8 @@ String shortHost(String host, String domain) {
   final suffix = '.$d';
   if (lower.endsWith(suffix)) return h.substring(0, h.length - suffix.length);
   if (lower == d) return '';
+  final partialLocal = partialDomainLocalHost(h, d);
+  if (partialLocal != null) return partialLocal;
   return h;
 }
 
@@ -592,6 +648,8 @@ String qualifyHost(String host, String domain) {
     return '$s.$d';
   }
   if (!h.contains('.')) return '$h.$d';
+  final expanded = expandPartialHost(h, d);
+  if (expanded != null) return expanded;
   return h;
 }
 
@@ -776,40 +834,67 @@ QuickConnectResult resolveQuickConnect({
     for (final p in withDomain) {
       if (hostMatchesDomain(host, p.domain)) {
         matched = p;
-        break; // first match wins if multiple
+        break; // first full match wins
       }
     }
     if (matched != null) {
       profileId = matched.id;
       activeProfile = matched;
       intent = QuickConnectIntent.confirmAddToGroup;
-    } else if (withDomain.isEmpty) {
-      return QuickConnectResult.ok(
-        QuickConnectTarget(
-          connectHost: host,
-          port: preliminary.port,
-          displayNumber: displayOmitted ? null : preliminary.displayNumber,
-          entryHost: host,
-          intent: QuickConnectIntent.needCreateProfile,
-        ),
-      );
     } else {
-      return QuickConnectResult.ok(
-        QuickConnectTarget(
-          connectHost: host,
-          port: preliminary.port,
-          displayNumber: displayOmitted ? null : preliminary.displayNumber,
-          entryHost: host,
-          intent: QuickConnectIntent.needGroupPick,
-        ),
-      );
+      final partials = withDomain
+          .where((p) => hostPartiallyMatchesDomain(host, p.domain))
+          .toList();
+      if (partials.length == 1) {
+        matched = partials.first;
+        host = expandPartialHost(host, matched.domain)!;
+        profileId = matched.id;
+        activeProfile = matched;
+        intent = QuickConnectIntent.confirmAddToGroup;
+      } else if (partials.length > 1) {
+        return QuickConnectResult.ok(
+          QuickConnectTarget(
+            connectHost: host,
+            port: preliminary.port,
+            displayNumber: displayOmitted ? null : preliminary.displayNumber,
+            entryHost: host,
+            intent: QuickConnectIntent.needGroupPick,
+          ),
+        );
+      } else if (withDomain.isEmpty) {
+        return QuickConnectResult.ok(
+          QuickConnectTarget(
+            connectHost: host,
+            port: preliminary.port,
+            displayNumber: displayOmitted ? null : preliminary.displayNumber,
+            entryHost: host,
+            intent: QuickConnectIntent.needCreateProfile,
+          ),
+        );
+      } else {
+        return QuickConnectResult.ok(
+          QuickConnectTarget(
+            connectHost: host,
+            port: preliminary.port,
+            displayNumber: displayOmitted ? null : preliminary.displayNumber,
+            entryHost: host,
+            intent: QuickConnectIntent.needGroupPick,
+          ),
+        );
+      }
     }
   } else {
-    // Sidebar / named filter: link profile; keep dotted host as typed.
-    for (final p in withDomain) {
-      if (hostMatchesDomain(host, p.domain)) {
+    // Sidebar / named filter: expand partial or keep FQDN as typed.
+    final d = normalizeDomain(filterProfile.domain);
+    if (d.isNotEmpty) {
+      if (hostMatchesDomain(host, d)) {
         activeProfile = filterProfile;
-        break;
+      } else {
+        final expanded = expandPartialHost(host, d);
+        if (expanded != null) {
+          host = expanded;
+          activeProfile = filterProfile;
+        }
       }
     }
   }
