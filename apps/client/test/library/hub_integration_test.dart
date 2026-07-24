@@ -11,7 +11,6 @@ import 'package:helmhost/storage/credential_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/fake_helm_bridge.dart';
-import '../helpers/tap_menu.dart';
 
 Widget _hub({
   required FakeHelmBridge bridge,

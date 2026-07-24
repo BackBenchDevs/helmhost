@@ -34,7 +34,7 @@ void main() {
   });
 
   group('LibraryStatusBar', () {
-    Widget _buildBar({
+    Widget buildBar({
       LibraryViewMode viewMode = LibraryViewMode.grid,
       LibraryGridSize gridSize = LibraryGridSize.medium,
       LibrarySort sort = LibrarySort.name,
@@ -114,7 +114,7 @@ void main() {
     testWidgets('grid-size popup shows in grid mode', (tester) async {
       LibraryGridSize? received;
       await tester.pumpWidget(
-        _buildBar(onGridSizeChanged: (s) => received = s),
+        buildBar(onGridSizeChanged: (s) => received = s),
       );
       expect(find.byKey(const Key('library-grid-size')), findsOneWidget);
       await tester.tap(find.byKey(const Key('library-grid-size')));
@@ -124,14 +124,14 @@ void main() {
     });
 
     testWidgets('grid-size control hidden in list mode', (tester) async {
-      await tester.pumpWidget(_buildBar(viewMode: LibraryViewMode.list));
+      await tester.pumpWidget(buildBar(viewMode: LibraryViewMode.list));
       expect(find.byKey(const Key('library-grid-size')), findsNothing);
     });
 
     testWidgets('sort popup selects sort value', (tester) async {
       LibrarySort? received;
       await tester.pumpWidget(
-        _buildBar(onSortChanged: (s) => received = s),
+        buildBar(onSortChanged: (s) => received = s),
       );
       await tester.tap(find.byKey(const Key('library-sort')));
       await tester.pumpAndSettle();
@@ -142,7 +142,7 @@ void main() {
     // ── tooltip ──────────────────────────────────────────────────────────────
 
     testWidgets('grid-size button has tooltip Grid size: Medium', (tester) async {
-      await tester.pumpWidget(_buildBar(gridSize: LibraryGridSize.medium));
+      await tester.pumpWidget(buildBar(gridSize: LibraryGridSize.medium));
       expect(find.byTooltip('Grid size: Medium'), findsOneWidget);
     });
 
@@ -150,14 +150,14 @@ void main() {
 
     testWidgets('connectionCount + connectionTotal shows N of M', (tester) async {
       await tester.pumpWidget(
-        _buildBar(connectionCount: 3, connectionTotal: 10),
+        buildBar(connectionCount: 3, connectionTotal: 10),
       );
       expect(find.textContaining('3 of 10'), findsOneWidget);
     });
 
     testWidgets('connectionCount only shows N connections', (tester) async {
       await tester.pumpWidget(
-        _buildBar(connectionCount: 3),
+        buildBar(connectionCount: 3),
       );
       expect(find.textContaining('3 connections'), findsOneWidget);
     });
@@ -167,7 +167,7 @@ void main() {
     testWidgets('thumb menu Slow fires LibraryThumbRefresh.slow', (tester) async {
       LibraryThumbRefresh? received;
       await tester.pumpWidget(
-        _buildBar(onThumbRefreshChanged: (r) => received = r),
+        buildBar(onThumbRefreshChanged: (r) => received = r),
       );
       await tester.tap(find.byKey(const Key('library-thumb-refresh')));
       await tester.pumpAndSettle();
@@ -180,7 +180,7 @@ void main() {
     testWidgets('Custom… dialog has Slider and Apply sets value', (tester) async {
       double? extentSet;
       await tester.pumpWidget(
-        _buildBar(
+        buildBar(
           onGridExtentChanged: (v) => extentSet = v,
           onGridSizeChanged: (_) {},
         ),
@@ -200,7 +200,7 @@ void main() {
     testWidgets('Custom… Reset to preset calls onGridExtentChanged(null)', (tester) async {
       double? extentSet = 300;
       await tester.pumpWidget(
-        _buildBar(
+        buildBar(
           gridExtent: 300,
           onGridExtentChanged: (v) => extentSet = v,
           onGridSizeChanged: (_) {},
