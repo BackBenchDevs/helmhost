@@ -5,6 +5,7 @@ import 'session_helpers.dart';
 
 const _kThemeMode = 'helmhost.themeMode';
 const _kLibraryViewMode = 'helmhost.libraryViewMode';
+const _kLibraryGridSize = 'helmhost.libraryGridSize';
 const _kViewScaleMode = 'helmhost.viewScaleMode';
 const _kSessionShell = 'helmhost.sessionShell';
 const _kAutoReconnectOnDrop = 'helmhost.autoReconnectOnDrop';
@@ -50,6 +51,26 @@ class AppPrefs {
   Future<void> setLibraryViewMode(LibraryViewMode mode) async {
     final v = mode == LibraryViewMode.list ? 'list' : 'grid';
     await _p.setString(_kLibraryViewMode, v);
+  }
+
+  LibraryGridSize get libraryGridSize {
+    switch (_p.getString(_kLibraryGridSize)) {
+      case 'small':
+        return LibraryGridSize.small;
+      case 'large':
+        return LibraryGridSize.large;
+      default:
+        return LibraryGridSize.medium;
+    }
+  }
+
+  Future<void> setLibraryGridSize(LibraryGridSize size) async {
+    final v = switch (size) {
+      LibraryGridSize.small => 'small',
+      LibraryGridSize.medium => 'medium',
+      LibraryGridSize.large => 'large',
+    };
+    await _p.setString(_kLibraryGridSize, v);
   }
 
   ViewScaleMode get viewScaleMode =>

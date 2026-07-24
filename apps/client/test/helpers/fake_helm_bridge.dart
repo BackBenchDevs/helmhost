@@ -63,6 +63,31 @@ class FakeHelmBridge implements IHelmBridge {
   }
 
   @override
+  Future<int> connectAsync(
+    String host,
+    int port, {
+    String? username,
+    String? password,
+    bool preferVencrypt = false,
+    bool acceptInvalidCerts = false,
+    int bandwidthPreset = 1,
+    int? qualityLevel,
+    int? compressLevel,
+  }) async {
+    return connect(
+      host,
+      port,
+      username: username,
+      password: password,
+      preferVencrypt: preferVencrypt,
+      acceptInvalidCerts: acceptInvalidCerts,
+      bandwidthPreset: bandwidthPreset,
+      qualityLevel: qualityLevel,
+      compressLevel: compressLevel,
+    );
+  }
+
+  @override
   Map<String, dynamic> pollEvent(int sessionId) {
     final q = _pollQueues[sessionId];
     if (q == null || q.isEmpty) return {'type': 'none'};

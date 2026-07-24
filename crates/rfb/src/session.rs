@@ -26,6 +26,7 @@ use helmhost_core::{
     DEFAULT_QUEUE_CAPACITY,
 };
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
@@ -61,6 +62,11 @@ impl SharedDesktop {
 }
 
 /// Connect TCP, handshake, spawn reader/writer tasks, return queue handle.
+///
+/// TCP connect is bounded by [`CONNECT_TIMEOUT`] so bad DNS/hosts fail fast
+/// instead of blocking the Flutter UI for an OS resolver timeout.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub async fn connect_tcp(
     id: SessionId,
     host: &str,
@@ -70,9 +76,40 @@ pub async fn connect_tcp(
     prefer_vencrypt: bool,
     encodings: &[i32],
 ) -> Result<SessionHandle, String> {
+    connect_tcp_with_timeout(
+        id,
+        host,
+        port,
+        creds,
+        tls,
+        prefer_vencrypt,
+        encodings,
+        CONNECT_TIMEOUT,
+    )
+    .await
+}
+
+/// Like [`connect_tcp`] with an explicit connect timeout (tests / tuning).
+#[allow(clippy::too_many_arguments)]
+pub async fn connect_tcp_with_timeout(
+    id: SessionId,
+    host: &str,
+    port: u16,
+    creds: Creds,
+    tls: TlsOptions,
+    prefer_vencrypt: bool,
+    encodings: &[i32],
+    connect_timeout: Duration,
+) -> Result<SessionHandle, String> {
     let addr = format!("{host}:{port}");
-    let stream = TcpStream::connect(&addr)
+    let stream = tokio::time::timeout(connect_timeout, TcpStream::connect(&addr))
         .await
+        .map_err(|_| {
+            format!(
+                "connect {addr}: timed out after {}s",
+                connect_timeout.as_secs().max(1)
+            )
+        })?
         .map_err(|e| format!("connect {addr}: {e}"))?;
     match connect_stream(
         id,
@@ -87,9 +124,16 @@ pub async fn connect_tcp(
     {
         Ok(handle) => Ok(handle),
         Err(e) if prefer_vencrypt && is_vencrypt_fallback_error(&e) => {
-            let stream = TcpStream::connect(&addr)
-                .await
-                .map_err(|re| format!("connect {addr} (fallback): {re}"))?;
+            let stream =
+                tokio::time::timeout(connect_timeout, TcpStream::connect(&addr))
+                    .await
+                    .map_err(|_| {
+                        format!(
+                            "connect {addr} (fallback): timed out after {}s",
+                            connect_timeout.as_secs().max(1)
+                        )
+                    })?
+                    .map_err(|re| format!("connect {addr} (fallback): {re}"))?;
             connect_stream(id, stream, host, creds, tls, false, encodings)
                 .await
                 .map_err(|e2| format!("{e}; classic fallback failed: {e2}"))
@@ -604,5 +648,43 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod connect_timeout_tests {
+    use super::*;
+    use helmhost_core::Creds;
+
+    #[tokio::test]
+    async fn connect_tcp_with_short_timeout_reports_timed_out() {
+        // TEST-NET-1 — typically unroutable; should hit our timeout, not hang.
+        let result = connect_tcp_with_timeout(
+            SessionId(1),
+            "192.0.2.1",
+            5999,
+            Creds {
+                username: None,
+                password: None,
+            },
+            TlsOptions::default(),
+            false,
+            &[],
+            Duration::from_millis(200),
+        )
+        .await;
+        let err = match result {
+            Ok(_) => panic!("expected timeout or connect error"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("timed out") || err.contains("connect 192.0.2.1:5999"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn default_connect_timeout_is_15s() {
+        assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(15));
     }
 }

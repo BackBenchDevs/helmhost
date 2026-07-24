@@ -113,6 +113,7 @@ class HubApp extends StatefulWidget {
 class _HubAppState extends State<HubApp> {
   late ThemeMode _themeMode;
   late LibraryViewMode _viewMode;
+  late LibraryGridSize _gridSize;
   late SessionShell _sessionShell;
 
   @override
@@ -120,6 +121,7 @@ class _HubAppState extends State<HubApp> {
     super.initState();
     _themeMode = widget.prefs.themeMode;
     _viewMode = widget.prefs.libraryViewMode;
+    _gridSize = widget.prefs.libraryGridSize;
     _sessionShell = widget.prefs.sessionShell;
   }
 
@@ -131,6 +133,11 @@ class _HubAppState extends State<HubApp> {
   Future<void> _setViewMode(LibraryViewMode mode) async {
     setState(() => _viewMode = mode);
     await widget.prefs.setLibraryViewMode(mode);
+  }
+
+  Future<void> _setGridSize(LibraryGridSize size) async {
+    setState(() => _gridSize = size);
+    await widget.prefs.setLibraryGridSize(size);
   }
 
   Future<void> _setSessionShell(SessionShell shell) async {
@@ -151,6 +158,8 @@ class _HubAppState extends State<HubApp> {
         onThemeModeChanged: _setTheme,
         viewMode: _viewMode,
         onViewModeChanged: _setViewMode,
+        gridSize: _gridSize,
+        onGridSizeChanged: _setGridSize,
         sessionShell: _sessionShell,
         onSessionShellChanged: _setSessionShell,
         prefs: widget.prefs,

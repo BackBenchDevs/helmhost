@@ -65,6 +65,7 @@ class _ProfileEditorDialogState extends State<_ProfileEditorDialog> {
   var _obscure = true;
   var _loaded = false;
   String? _error;
+  String? _lastAutoName;
 
   @override
   void initState() {
@@ -82,7 +83,24 @@ class _ProfileEditorDialogState extends State<_ProfileEditorDialog> {
     _acceptInvalidCerts = e?.acceptInvalidCerts ?? false;
     _viewOnly = e?.viewOnly ?? false;
     _savePassword = e != null;
+    if (e == null && _domain.text.isNotEmpty) {
+      _lastAutoName = suggestProfileNameFromDomain(_domain.text);
+    }
     _loadPassword();
+  }
+
+  void _onDomainChanged(String _) {
+    final suggested = suggestProfileNameFromDomain(_domain.text);
+    final name = _name.text.trim();
+    final shouldFill = name.isEmpty ||
+        (_lastAutoName != null && name == _lastAutoName);
+    setState(() {
+      _error = null;
+      if (shouldFill && suggested.isNotEmpty) {
+        _name.text = suggested;
+        _lastAutoName = suggested;
+      }
+    });
   }
 
   Future<void> _loadPassword() async {
@@ -198,7 +216,7 @@ class _ProfileEditorDialogState extends State<_ProfileEditorDialog> {
                       : 'Hosts connect as host.${normalizeDomain(_domain.text)}',
                   errorText: _error,
                 ),
-                onChanged: (_) => setState(() => _error = null),
+                onChanged: _onDomainChanged,
               ),
               const SizedBox(height: 12),
               TextField(

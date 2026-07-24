@@ -40,10 +40,12 @@ void main() {
             bottomNavigationBar: LibraryStatusBar(
               sessionShell: SessionShell.tabs,
               viewMode: LibraryViewMode.grid,
+              gridSize: LibraryGridSize.medium,
               themeMode: ThemeMode.system,
               coreVersion: '0.1.0',
               onToggleShell: () {},
               onToggleView: () {},
+              onCycleGridSize: () {},
               onCycleTheme: () {},
               onImport: () {},
               onExport: () {},

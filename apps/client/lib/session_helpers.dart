@@ -338,6 +338,28 @@ AuthNeed parseAuthNeed(String error) {
 
 enum LibraryViewMode { grid, list }
 
+enum LibraryGridSize { small, medium, large }
+
+extension LibraryGridSizeX on LibraryGridSize {
+  double get maxCrossAxisExtent => switch (this) {
+        LibraryGridSize.small => 200,
+        LibraryGridSize.medium => 260,
+        LibraryGridSize.large => 340,
+      };
+
+  String get label => switch (this) {
+        LibraryGridSize.small => 'Small',
+        LibraryGridSize.medium => 'Medium',
+        LibraryGridSize.large => 'Large',
+      };
+
+  LibraryGridSize get next => switch (this) {
+        LibraryGridSize.small => LibraryGridSize.medium,
+        LibraryGridSize.medium => LibraryGridSize.large,
+        LibraryGridSize.large => LibraryGridSize.small,
+      };
+}
+
 String normalizeDomain(String domain) => domain
     .trim()
     .replaceFirst(RegExp(r'^\.+'), '')
@@ -387,6 +409,18 @@ bool cardMatchesProfile(LibraryCard card, ConnectionProfileCard profile) {
       hostMatchesDomain(qualifyHost(card.host, d), d);
 }
 
+/// Next UI step after [resolveQuickConnect] / [resolveNewConnectionHost].
+enum QuickConnectIntent {
+  /// Profile known (sidebar filter / named group) — connect without prompt.
+  ready,
+  /// New host matched/qualified to a group — confirm Add to group.
+  confirmAddToGroup,
+  /// Need user to pick a group (short host with 2+ domains, or unmatched FQDN).
+  needGroupPick,
+  /// No profiles with a Domain — offer Create profile.
+  needCreateProfile,
+}
+
 /// Result of resolving an address-bar quick-connect string.
 class QuickConnectTarget {
   const QuickConnectTarget({
@@ -395,6 +429,7 @@ class QuickConnectTarget {
     this.displayNumber,
     this.profileId,
     required this.entryHost,
+    this.intent = QuickConnectIntent.ready,
   });
 
   final String connectHost;
@@ -402,6 +437,11 @@ class QuickConnectTarget {
   final int? displayNumber;
   final String? profileId;
   final String entryHost;
+  final QuickConnectIntent intent;
+
+  /// True when Auto assigned a group and UI should confirm before filing.
+  bool get autoAssignedProfile =>
+      intent == QuickConnectIntent.confirmAddToGroup;
 }
 
 class QuickConnectResult {
@@ -410,6 +450,48 @@ class QuickConnectResult {
 
   final QuickConnectTarget? target;
   final String? error;
+}
+
+List<ConnectionProfileCard> profilesWithDomain(
+  List<ConnectionProfileCard> profiles,
+) =>
+    profiles.where((p) => normalizeDomain(p.domain).isNotEmpty).toList();
+
+QuickConnectTarget _finishQuickConnectTarget({
+  required String host,
+  required int preliminaryPort,
+  required int? preliminaryDisplay,
+  required bool displayOmitted,
+  required ConnectionProfileCard? activeProfile,
+  required String? profileId,
+  required QuickConnectIntent intent,
+}) {
+  var port = preliminaryPort;
+  int? displayNumber = preliminaryDisplay;
+
+  if (displayOmitted) {
+    final def = activeProfile?.defaultDisplay;
+    if (def != null) {
+      displayNumber = def;
+      port = portFromDisplay(def);
+    }
+  }
+
+  var entryHost = host;
+  if (activeProfile != null &&
+      normalizeDomain(activeProfile.domain).isNotEmpty) {
+    final short = shortHost(host, activeProfile.domain);
+    entryHost = short.isEmpty ? host : short;
+  }
+
+  return QuickConnectTarget(
+    connectHost: host,
+    port: port,
+    displayNumber: displayNumber,
+    profileId: profileId,
+    entryHost: entryHost,
+    intent: intent,
+  );
 }
 
 /// Qualify short hosts, apply profile [defaultDisplay] when display omitted.
@@ -444,9 +526,11 @@ QuickConnectResult resolveQuickConnect({
 
   var host = preliminary.host;
   final hostIsShort = !host.contains('.');
+  final withDomain = profilesWithDomain(profiles);
 
   String? profileId = filterProfile?.id;
   ConnectionProfileCard? activeProfile = filterProfile;
+  var intent = QuickConnectIntent.ready;
 
   if (hostIsShort) {
     if (filterProfile != null &&
@@ -457,20 +541,30 @@ QuickConnectResult resolveQuickConnect({
     }
     var qualifyWith = filterProfile;
     if (qualifyWith == null) {
-      final withDomain = profiles
-          .where((p) => normalizeDomain(p.domain).isNotEmpty)
-          .toList();
-      if (withDomain.length == 1) {
-        qualifyWith = withDomain.first;
-      } else if (withDomain.isEmpty) {
-        return const QuickConnectResult.fail(
-          'Create a profile with a Domain, or type a full hostname',
-        );
-      } else {
-        return const QuickConnectResult.fail(
-          'Select a group in the sidebar to connect short hostnames',
+      if (withDomain.isEmpty) {
+        return QuickConnectResult.ok(
+          QuickConnectTarget(
+            connectHost: host,
+            port: preliminary.port,
+            displayNumber: displayOmitted ? null : preliminary.displayNumber,
+            entryHost: host,
+            intent: QuickConnectIntent.needCreateProfile,
+          ),
         );
       }
+      if (withDomain.length > 1) {
+        return QuickConnectResult.ok(
+          QuickConnectTarget(
+            connectHost: host,
+            port: preliminary.port,
+            displayNumber: displayOmitted ? null : preliminary.displayNumber,
+            entryHost: host,
+            intent: QuickConnectIntent.needGroupPick,
+          ),
+        );
+      }
+      qualifyWith = withDomain.first;
+      intent = QuickConnectIntent.confirmAddToGroup;
     }
     if (normalizeDomain(qualifyWith.domain).isEmpty) {
       return QuickConnectResult.fail(
@@ -480,43 +574,235 @@ QuickConnectResult resolveQuickConnect({
     profileId = qualifyWith.id;
     activeProfile = qualifyWith;
     host = qualifyHost(host, qualifyWith.domain);
-  } else {
-    for (final p in profiles) {
+  } else if (filterProfile == null) {
+    ConnectionProfileCard? matched;
+    for (final p in withDomain) {
       if (hostMatchesDomain(host, p.domain)) {
-        profileId ??= p.id;
-        activeProfile ??= p;
+        matched = p;
+        break; // first match wins if multiple
+      }
+    }
+    if (matched != null) {
+      profileId = matched.id;
+      activeProfile = matched;
+      intent = QuickConnectIntent.confirmAddToGroup;
+    } else if (withDomain.isEmpty) {
+      return QuickConnectResult.ok(
+        QuickConnectTarget(
+          connectHost: host,
+          port: preliminary.port,
+          displayNumber: displayOmitted ? null : preliminary.displayNumber,
+          entryHost: host,
+          intent: QuickConnectIntent.needCreateProfile,
+        ),
+      );
+    } else {
+      return QuickConnectResult.ok(
+        QuickConnectTarget(
+          connectHost: host,
+          port: preliminary.port,
+          displayNumber: displayOmitted ? null : preliminary.displayNumber,
+          entryHost: host,
+          intent: QuickConnectIntent.needGroupPick,
+        ),
+      );
+    }
+  } else {
+    // Sidebar / named filter: link profile; keep dotted host as typed.
+    for (final p in withDomain) {
+      if (hostMatchesDomain(host, p.domain)) {
+        activeProfile = filterProfile;
         break;
       }
     }
   }
 
-  var port = preliminary.port;
-  int? displayNumber = preliminary.displayNumber;
-
-  if (displayOmitted) {
-    final def = activeProfile?.defaultDisplay;
-    if (def != null) {
-      displayNumber = def;
-      port = portFromDisplay(def);
-    }
-  }
-
-  var entryHost = host;
-  if (activeProfile != null &&
-      normalizeDomain(activeProfile.domain).isNotEmpty) {
-    final short = shortHost(host, activeProfile.domain);
-    entryHost = short.isEmpty ? host : short;
-  }
-
   return QuickConnectResult.ok(
-    QuickConnectTarget(
-      connectHost: host,
-      port: port,
-      displayNumber: displayNumber,
+    _finishQuickConnectTarget(
+      host: host,
+      preliminaryPort: preliminary.port,
+      preliminaryDisplay: preliminary.displayNumber,
+      displayOmitted: displayOmitted,
+      activeProfile: activeProfile,
       profileId: profileId,
-      entryHost: entryHost,
+      intent: intent,
     ),
   );
+}
+
+/// New Connection dialog resolve: [profileKey] null=Auto, `__none__`=None, else id.
+QuickConnectResult resolveNewConnectionHost({
+  required String rawInput,
+  required List<ConnectionProfileCard> profiles,
+  String? profileKey,
+}) {
+  if (profileKey == '__none__') {
+    final raw = rawInput.trim();
+    if (raw.isEmpty) {
+      return const QuickConnectResult.fail('Enter a host or VNC address');
+    }
+    final preliminary = tryParseVncAddress(raw);
+    if (preliminary == null) {
+      return const QuickConnectResult.fail('Invalid VNC address');
+    }
+    if (!preliminary.host.contains('.')) {
+      return const QuickConnectResult.fail(
+        'Choose a group with a Domain, or type a full hostname',
+      );
+    }
+    final hadRawPort = raw.contains('::');
+    final displayOmitted =
+        preliminary.displayNumber == null && !hadRawPort;
+    return QuickConnectResult.ok(
+      QuickConnectTarget(
+        connectHost: preliminary.host,
+        port: preliminary.port,
+        displayNumber: displayOmitted ? null : preliminary.displayNumber,
+        profileId: null,
+        entryHost: preliminary.host,
+        intent: QuickConnectIntent.ready,
+      ),
+    );
+  }
+
+  return resolveQuickConnect(
+    rawInput: rawInput,
+    profiles: profiles,
+    filterProfileId: profileKey,
+  );
+}
+
+/// Suggest editable group Name from Domain (`bec.broadcom.net` → `bec.broadcom`).
+String suggestProfileNameFromDomain(String domain) {
+  var d = normalizeDomain(domain);
+  if (d.startsWith('www.')) d = d.substring(4);
+  if (d.isEmpty) return '';
+  final parts = d.split('.')..removeWhere((p) => p.isEmpty);
+  if (parts.length >= 3) {
+    return parts.sublist(0, parts.length - 1).join('.');
+  }
+  return d;
+}
+
+/// Find a library card that already represents [connectHost]:[port].
+LibraryCard? findDuplicateLibraryCard({
+  required Iterable<LibraryCard> cards,
+  required String connectHost,
+  required int port,
+  required List<ConnectionProfileCard> profiles,
+}) {
+  final want = sessionKey(connectHost.trim().toLowerCase(), port);
+  for (final c in cards) {
+    final keys = <String>{
+      c.id.toLowerCase(),
+      sessionKey(c.host.trim().toLowerCase(), c.port),
+    };
+    if (c.profileId != null) {
+      for (final p in profiles) {
+        if (p.id == c.profileId && normalizeDomain(p.domain).isNotEmpty) {
+          keys.add(
+            sessionKey(
+              qualifyHost(c.host, p.domain).toLowerCase(),
+              c.port,
+            ),
+          );
+        }
+      }
+    } else if (!c.profileNone) {
+      for (final p in profiles) {
+        if (normalizeDomain(p.domain).isEmpty) continue;
+        keys.add(
+          sessionKey(qualifyHost(c.host, p.domain).toLowerCase(), c.port),
+        );
+      }
+    }
+    if (keys.contains(want)) return c;
+  }
+  return null;
+}
+
+/// Preview shown when Auto assigns a group (FQDN + name confirmation).
+class AutoGroupAssignPreview {
+  const AutoGroupAssignPreview({
+    required this.groupName,
+    required this.groupId,
+    required this.connectHost,
+    required this.entryHost,
+    required this.suggestedName,
+    required this.port,
+  });
+
+  final String groupName;
+  final String groupId;
+  final String connectHost;
+  final String entryHost;
+  final String suggestedName;
+  final int port;
+}
+
+/// Build confirm preview when [target] should confirm Add to group.
+AutoGroupAssignPreview? autoGroupAssignPreview({
+  required QuickConnectTarget target,
+  required List<ConnectionProfileCard> profiles,
+  String? explicitDisplayName,
+}) {
+  if (target.intent != QuickConnectIntent.confirmAddToGroup ||
+      target.profileId == null) {
+    return null;
+  }
+  return groupAssignPreviewFor(
+    target: target,
+    profiles: profiles,
+    explicitDisplayName: explicitDisplayName,
+  );
+}
+
+/// Preview for a target that already has [QuickConnectTarget.profileId].
+AutoGroupAssignPreview? groupAssignPreviewFor({
+  required QuickConnectTarget target,
+  required List<ConnectionProfileCard> profiles,
+  String? explicitDisplayName,
+}) {
+  if (target.profileId == null) return null;
+  ConnectionProfileCard? group;
+  for (final p in profiles) {
+    if (p.id == target.profileId) {
+      group = p;
+      break;
+    }
+  }
+  if (group == null) return null;
+  final name =
+      (explicitDisplayName != null && explicitDisplayName.trim().isNotEmpty)
+          ? explicitDisplayName.trim()
+          : displayNameFromHost(target.entryHost);
+  return AutoGroupAssignPreview(
+    groupName: group.name,
+    groupId: group.id,
+    connectHost: target.connectHost,
+    entryHost: target.entryHost,
+    suggestedName: name,
+    port: target.port,
+  );
+}
+
+/// Reassign [existing] to the draft's profile without creating a second card.
+Map<String, dynamic> mergeMovedDuplicateEntry({
+  required LibraryCard existing,
+  required Map<String, dynamic> draft,
+}) {
+  final wantNone = draft['profile_none'] == true;
+  final wantProfileId = draft['profile_id'] as String?;
+  return {
+    ...existing.toJson(),
+    ...draft,
+    'id': existing.id,
+    'host': existing.host,
+    'port': existing.port,
+    if (wantNone) 'profile_id': null,
+    'profile_none': wantNone,
+    if (!wantNone && wantProfileId != null) 'profile_id': wantProfileId,
+  };
 }
 
 /// Connect port for a library card after registry resolve.

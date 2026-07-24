@@ -28,6 +28,17 @@ void main() {
       expect(prefs.libraryViewMode, LibraryViewMode.list);
     });
 
+    test('libraryGridSize defaults to medium', () async {
+      final prefs = await AppPrefs.open();
+      expect(prefs.libraryGridSize, LibraryGridSize.medium);
+      await prefs.setLibraryGridSize(LibraryGridSize.small);
+      expect(prefs.libraryGridSize, LibraryGridSize.small);
+      await prefs.setLibraryGridSize(LibraryGridSize.large);
+      expect(prefs.libraryGridSize, LibraryGridSize.large);
+      await prefs.setLibraryGridSize(LibraryGridSize.medium);
+      expect(prefs.libraryGridSize, LibraryGridSize.medium);
+    });
+
     test('viewScaleMode', () async {
       final prefs = await AppPrefs.open();
       expect(prefs.viewScaleMode, ViewScaleMode.fit);

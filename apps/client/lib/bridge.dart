@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 
@@ -14,6 +15,19 @@ abstract class IHelmBridge {
   Future<void> initRegistry();
 
   int connect(
+    String host,
+    int port, {
+    String? username,
+    String? password,
+    bool preferVencrypt = false,
+    bool acceptInvalidCerts = false,
+    int bandwidthPreset = 1,
+    int? qualityLevel,
+    int? compressLevel,
+  });
+
+  /// Native connect off the UI isolate (process-global session table).
+  Future<int> connectAsync(
     String host,
     int port, {
     String? username,
@@ -268,6 +282,32 @@ class HelmBridge implements IHelmBridge {
   }
 
   @override
+  Future<int> connectAsync(
+    String host,
+    int port, {
+    String? username,
+    String? password,
+    bool preferVencrypt = false,
+    bool acceptInvalidCerts = false,
+    int bandwidthPreset = 1,
+    int? qualityLevel,
+    int? compressLevel,
+  }) {
+    final args = _ConnectIsolateArgs(
+      host: host,
+      port: port,
+      username: username,
+      password: password,
+      preferVencrypt: preferVencrypt,
+      acceptInvalidCerts: acceptInvalidCerts,
+      bandwidthPreset: bandwidthPreset,
+      qualityLevel: qualityLevel,
+      compressLevel: compressLevel,
+    );
+    return Isolate.run(() => _connectInIsolate(args));
+  }
+
+  @override
   Map<String, dynamic> pollEvent(int sessionId) {
     final r = _take(_poll(sessionId));
     if (r.startsWith('ERR:')) throw StateError(r);
@@ -467,4 +507,43 @@ class HelmBridge implements IHelmBridge {
       malloc.free(c);
     }
   }
+}
+
+class _ConnectIsolateArgs {
+  const _ConnectIsolateArgs({
+    required this.host,
+    required this.port,
+    this.username,
+    this.password,
+    required this.preferVencrypt,
+    required this.acceptInvalidCerts,
+    required this.bandwidthPreset,
+    this.qualityLevel,
+    this.compressLevel,
+  });
+
+  final String host;
+  final int port;
+  final String? username;
+  final String? password;
+  final bool preferVencrypt;
+  final bool acceptInvalidCerts;
+  final int bandwidthPreset;
+  final int? qualityLevel;
+  final int? compressLevel;
+}
+
+int _connectInIsolate(_ConnectIsolateArgs a) {
+  final b = HelmBridge.open();
+  return b.connect(
+    a.host,
+    a.port,
+    username: a.username,
+    password: a.password,
+    preferVencrypt: a.preferVencrypt,
+    acceptInvalidCerts: a.acceptInvalidCerts,
+    bandwidthPreset: a.bandwidthPreset,
+    qualityLevel: a.qualityLevel,
+    compressLevel: a.compressLevel,
+  );
 }

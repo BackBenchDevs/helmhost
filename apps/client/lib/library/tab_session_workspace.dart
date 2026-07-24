@@ -56,7 +56,7 @@ class TabSessionWorkspace extends StatelessWidget {
         children: [
           for (final s in sessions)
             SessionPage(
-              key: ValueKey('tab-session-${s.id}'),
+              key: ValueKey('tab-session-${s.id}-${s.key}'),
               sessionId: s.id,
               title: s.key,
               host: s.host,

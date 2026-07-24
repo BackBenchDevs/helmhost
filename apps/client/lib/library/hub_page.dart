@@ -43,6 +43,8 @@ class HubPage extends StatefulWidget {
     required this.onThemeModeChanged,
     required this.viewMode,
     required this.onViewModeChanged,
+    required this.gridSize,
+    required this.onGridSizeChanged,
     required this.sessionShell,
     required this.onSessionShellChanged,
     this.prefs,
@@ -55,6 +57,8 @@ class HubPage extends StatefulWidget {
   final ValueChanged<ThemeMode> onThemeModeChanged;
   final LibraryViewMode viewMode;
   final ValueChanged<LibraryViewMode> onViewModeChanged;
+  final LibraryGridSize gridSize;
+  final ValueChanged<LibraryGridSize> onGridSizeChanged;
   final SessionShell sessionShell;
   final ValueChanged<SessionShell> onSessionShellChanged;
   final AppPrefs? prefs;
@@ -437,6 +441,15 @@ class _HubPageState extends State<HubPage> with WindowListener {
         (resolved?['connect_host'] as String?)?.trim().isNotEmpty == true
             ? resolved!['connect_host'] as String
             : card.host;
+    if (connectHost.trim().isEmpty) {
+      if (mounted) {
+        setState(() {
+          _error =
+              'Connect failed: hostname is empty for “${card.title}” — edit the card and set a full VNC address';
+        });
+      }
+      return;
+    }
     final pwd = await resolvePassword(
       store: _credentials,
       entryId: card.id,
@@ -571,7 +584,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
     bool savePasswordToProfile = false,
   }) async {
     try {
-      final id = b.connect(
+      final id = await b.connectAsync(
         host,
         port,
         username: username,
@@ -737,10 +750,61 @@ class _HubPageState extends State<HubPage> with WindowListener {
         : 'Connect failed: $s';
   }
 
-  Future<void> _handleEditorResult(ConnectionEditorResult result) async {
+  Future<void> _handleEditorResult(
+    ConnectionEditorResult result, {
+    LibraryCard? editing,
+  }) async {
     final b = _bridge;
     if (b == null) return;
-    final merged = _mergeEntryPreserving(result.entry, result.entry['id'] as String);
+    var merged =
+        _mergeEntryPreserving(result.entry, result.entry['id'] as String);
+
+    final port = (merged['port'] as num?)?.toInt() ?? 5900;
+    final qualifiedHost = () {
+      final pid = merged['profile_id'] as String?;
+      if (pid != null) {
+        for (final p in _profiles) {
+          if (p.id == pid) {
+            return qualifyHost(merged['host'] as String, p.domain);
+          }
+        }
+      }
+      final h = merged['host'] as String;
+      if (h.contains('.')) return h;
+      return h;
+    }();
+
+    final dup = findDuplicateLibraryCard(
+      cards: _cards,
+      connectHost: qualifiedHost,
+      port: port,
+      profiles: _profiles,
+    );
+    if (dup != null && editing?.id != dup.id) {
+      final wantProfileId = merged['profile_id'] as String?;
+      final wantNone = merged['profile_none'] == true;
+      final sameGroup = wantNone
+          ? dup.profileNone
+          : (wantProfileId != null && dup.profileId == wantProfileId);
+      final choice = await _showDuplicateConnectionDialog(
+        existing: dup,
+        targetProfileId: wantNone ? null : wantProfileId,
+        targetProfileNone: wantNone,
+        sameGroup: sameGroup,
+      );
+      if (choice == null || choice == _DuplicateChoice.cancel) return;
+      if (choice == _DuplicateChoice.open) {
+        setState(() {
+          _profileFilterId = dup.profileId;
+          _libraryOverlayOpen = true;
+        });
+        if (result.connect) await _connectCard(dup);
+        return;
+      }
+      // Move to group: keep existing id/host, apply new profile + draft fields.
+      merged = mergeMovedDuplicateEntry(existing: dup, draft: merged);
+    }
+
     b.registryUpsertJson(merged);
     await _persistEntryCredentials(
       merged,
@@ -786,6 +850,68 @@ class _HubPageState extends State<HubPage> with WindowListener {
     }
   }
 
+  Future<_DuplicateChoice?> _showDuplicateConnectionDialog({
+    required LibraryCard existing,
+    required String? targetProfileId,
+    required bool targetProfileNone,
+    required bool sameGroup,
+  }) {
+    String groupLabel(LibraryCard c) {
+      if (c.profileNone) return 'None';
+      if (c.profileId != null) {
+        for (final p in _profiles) {
+          if (p.id == c.profileId) return p.name;
+        }
+        return c.profileId!;
+      }
+      return 'Auto';
+    }
+
+    String targetLabel() {
+      if (targetProfileNone) return 'None';
+      if (targetProfileId != null) {
+        for (final p in _profiles) {
+          if (p.id == targetProfileId) return p.name;
+        }
+        return targetProfileId;
+      }
+      return 'Auto';
+    }
+
+    return showDialog<_DuplicateChoice>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('duplicate-connection-dialog'),
+        title: const Text('Connection already exists'),
+        content: Text(
+          sameGroup
+              ? '${existing.host}:${existing.port} is already in the library '
+                  'under “${groupLabel(existing)}”.\n\n'
+                  'No duplicate entry will be created.'
+              : '${existing.host}:${existing.port} is already in the library '
+                  'under “${groupLabel(existing)}”.\n\n'
+                  'You are adding under “${targetLabel()}”.\n\n'
+                  'No duplicate entry will be created.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, _DuplicateChoice.cancel),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, _DuplicateChoice.open),
+            child: const Text('Open existing'),
+          ),
+          if (!sameGroup)
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, _DuplicateChoice.move),
+              child: const Text('Move to group'),
+            ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showNewEditor({String? initialProfileId}) async {
     ConnectionProfileCard? prefill;
     if (initialProfileId != null && initialProfileId != '__none__') {
@@ -803,6 +929,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       profileCards: List.unmodifiable(_profiles),
       initialProfileId: initialProfileId,
       prefillProfile: prefill,
+      onCreateProfile: _createOrEditProfile,
     );
     if (result != null) await _handleEditorResult(result);
   }
@@ -814,7 +941,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       credentials: _credentials,
       profiles: _profileChoices(),
     );
-    if (result != null) await _handleEditorResult(result);
+    if (result != null) await _handleEditorResult(result, editing: card);
   }
 
   List<ProfileChoice> _profileChoices() => [
@@ -829,23 +956,118 @@ class _HubPageState extends State<HubPage> with WindowListener {
       return;
     }
 
-    final result = resolveQuickConnect(
-      rawInput: raw,
-      profiles: _profiles,
-      filterProfileId: _profileFilterId,
-    );
-    if (result.error != null) {
-      setState(() => _searchPatternError = result.error);
+    var profiles = List<ConnectionProfileCard>.of(_profiles);
+    var filterId = _profileFilterId;
+    var fromPicker = false;
+
+    for (;;) {
+      final result = resolveQuickConnect(
+        rawInput: raw,
+        profiles: profiles,
+        filterProfileId: filterId,
+      );
+      if (result.error != null) {
+        setState(() => _searchPatternError = result.error);
+        return;
+      }
+      final target = result.target!;
+      setState(() => _searchPatternError = null);
+
+      final alreadyKnown = findDuplicateLibraryCard(
+            cards: _cards,
+            connectHost: target.connectHost,
+            port: target.port,
+            profiles: profiles,
+          ) !=
+          null;
+
+      // Existing library card with a resolved host — connect without prompts.
+      if (alreadyKnown &&
+          target.intent != QuickConnectIntent.needGroupPick &&
+          target.intent != QuickConnectIntent.needCreateProfile) {
+        await _finishAddressBarConnect(target: target);
+        return;
+      }
+
+      if (_profileFilterId == null) {
+        if (target.intent == QuickConnectIntent.needGroupPick ||
+            target.intent == QuickConnectIntent.needCreateProfile) {
+          if (!mounted) return;
+          final pick = await showGroupPickDialog(
+            context,
+            profiles: profiles,
+            hostLabel: target.connectHost,
+          );
+          if (pick == null || !mounted) return;
+          if (pick.createProfile) {
+            final created = await _createOrEditProfile();
+            if (created == null || !mounted) return;
+            profiles = List<ConnectionProfileCard>.of(_profiles);
+            if (normalizeDomain(created.domain).isEmpty) {
+              setState(() {
+                _searchPatternError =
+                    '“${created.name}” has no Domain — edit the profile';
+              });
+              return;
+            }
+            filterId = created.id;
+            fromPicker = true;
+            continue;
+          }
+          filterId = pick.profileId;
+          fromPicker = true;
+          continue;
+        }
+
+        if (target.intent == QuickConnectIntent.confirmAddToGroup ||
+            fromPicker) {
+          final preview = target.intent == QuickConnectIntent.confirmAddToGroup
+              ? autoGroupAssignPreview(target: target, profiles: profiles)
+              : groupAssignPreviewFor(target: target, profiles: profiles);
+          if (preview != null) {
+            if (!mounted) return;
+            final confirmed = await showAutoGroupAssignConfirm(
+              context,
+              preview: preview,
+            );
+            if (confirmed == null || !mounted) return;
+            await _finishAddressBarConnect(
+              target: QuickConnectTarget(
+                connectHost: confirmed.connectHost,
+                port: confirmed.port,
+                displayNumber: target.displayNumber,
+                profileId: confirmed.groupId,
+                entryHost: confirmed.entryHost,
+                intent: QuickConnectIntent.ready,
+              ),
+              displayName: confirmed.suggestedName,
+            );
+            return;
+          }
+        }
+      }
+
+      await _finishAddressBarConnect(target: target);
       return;
     }
-    final target = result.target!;
-    setState(() => _searchPatternError = null);
+  }
 
+  Future<void> _finishAddressBarConnect({
+    required QuickConnectTarget target,
+    String? displayName,
+  }) async {
     final connectHost = target.connectHost;
     final port = target.port;
-    final key = sessionKey(connectHost, port);
     var profileId = target.profileId;
     final short = target.entryHost;
+
+    if (connectHost.trim().isEmpty) {
+      setState(() =>
+          _searchPatternError = 'Hostname is empty — check the address');
+      return;
+    }
+
+    final key = sessionKey(connectHost, port);
 
     Map<String, dynamic>? entry;
     for (final c in _cards) {
@@ -863,7 +1085,14 @@ class _HubPageState extends State<HubPage> with WindowListener {
       'port': port,
       if (target.displayNumber != null) 'display_number': target.displayNumber,
       if (profileId != null) 'profile_id': profileId,
+      if (displayName != null) 'display_name': displayName,
     };
+    if (displayName != null) {
+      entry = {...entry, 'display_name': displayName};
+      if (profileId != null) {
+        entry = {...entry, 'profile_id': profileId};
+      }
+    }
 
     final pwd = await resolvePassword(
       store: _credentials,
@@ -878,7 +1107,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       password: pwd,
       preferVencrypt: entry['prefer_vencrypt'] as bool? ?? false,
       acceptInvalidCerts: entry['accept_invalid_certs'] as bool? ?? false,
-      displayName: entry['display_name'] as String?,
+      displayName: entry['display_name'] as String? ?? displayName,
       profileId: profileId,
     );
   }
@@ -965,6 +1194,13 @@ class _HubPageState extends State<HubPage> with WindowListener {
   }
 
   Future<void> _editProfile([ConnectionProfileCard? existing]) async {
+    await _createOrEditProfile(existing);
+  }
+
+  /// Opens profile editor; returns saved profile or null if cancelled/failed.
+  Future<ConnectionProfileCard?> _createOrEditProfile([
+    ConnectionProfileCard? existing,
+  ]) async {
     final result = await showProfileEditor(
       context,
       existing: existing,
@@ -973,7 +1209,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
           ? null
           : () => unawaited(_showNewEditor(initialProfileId: existing.id)),
     );
-    if (result == null) return;
+    if (result == null) return null;
     final json = result.profile.toJson();
     widget.logger.info('profile upsert', {
       'id': result.profile.id,
@@ -989,7 +1225,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
           SnackBar(content: Text('Failed to save profile: $e')),
         );
       }
-      return;
+      return null;
     }
     try {
       await persistProfileCredentials(
@@ -1006,7 +1242,6 @@ class _HubPageState extends State<HubPage> with WindowListener {
         );
       }
     }
-    // Confirm what actually landed after reload from FFI.
     setState(_reloadCards);
     ConnectionProfileCard? saved;
     for (final p in _profiles) {
@@ -1032,6 +1267,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         ),
       );
     }
+    return saved ?? result.profile;
   }
 
   Future<void> _deleteProfile(ConnectionProfileCard p) async {
@@ -1264,6 +1500,10 @@ class _HubPageState extends State<HubPage> with WindowListener {
     widget.onViewModeChanged(next);
   }
 
+  void _cycleGridSize() {
+    widget.onGridSizeChanged(widget.gridSize.next);
+  }
+
   Widget? _addConnectionBanner() {
     final pid = _profileFilterId;
     if (pid == null) return null;
@@ -1345,11 +1585,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.all(16),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 340,
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: widget.gridSize.maxCrossAxisExtent,
               mainAxisSpacing: 16,
               crossAxisSpacing: 16,
-              childAspectRatio: 1.05,
+              childAspectRatio: 0.95,
             ),
             itemCount: filtered.length,
             itemBuilder: (context, i) {
@@ -1565,11 +1805,13 @@ class _HubPageState extends State<HubPage> with WindowListener {
     final libraryStatusBar = LibraryStatusBar(
       sessionShell: widget.sessionShell,
       viewMode: widget.viewMode,
+      gridSize: widget.gridSize,
       themeMode: widget.themeMode,
       coreVersion: _coreVersion,
       statusMessage: _error != null ? 'Bridge error' : null,
       onToggleShell: _toggleSessionShell,
       onToggleView: _toggleViewMode,
+      onCycleGridSize: _cycleGridSize,
       onCycleTheme: _cycleTheme,
       onImport: _importLibrary,
       onExport: _exportLibrary,
@@ -1710,3 +1952,5 @@ class _HubPageState extends State<HubPage> with WindowListener {
     );
   }
 }
+
+enum _DuplicateChoice { cancel, open, move }

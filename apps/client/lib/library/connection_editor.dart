@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../session_helpers.dart';
 import '../storage/credential_store.dart';
-import 'vnc_address.dart';
 
 /// Result from New Connection or Properties dialogs.
 class ConnectionEditorResult {
@@ -17,6 +16,178 @@ class ConnectionEditorResult {
   final String? password;
   final bool savePassword;
   final bool connect;
+}
+
+/// Confirm Auto group assignment (FQDN + editable name) before save/connect.
+Future<AutoGroupAssignPreview?> showAutoGroupAssignConfirm(
+  BuildContext context, {
+  required AutoGroupAssignPreview preview,
+}) {
+  final nameCtrl = TextEditingController(text: preview.suggestedName);
+  return showDialog<AutoGroupAssignPreview>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) {
+      return AlertDialog(
+        key: const Key('auto-group-assign-dialog'),
+        title: Text('Add to “${preview.groupName}”?'),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'This host will be filed under this group.',
+                style: Theme.of(ctx).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 12),
+              Text('Connect to', style: Theme.of(ctx).textTheme.labelMedium),
+              SelectableText(
+                '${preview.connectHost}:${preview.port}',
+                style: Theme.of(ctx).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('auto-group-assign-name'),
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Name',
+                  hintText: 'Display name in library',
+                ),
+                autofocus: true,
+                onSubmitted: (_) {
+                  Navigator.pop(
+                    ctx,
+                    AutoGroupAssignPreview(
+                      groupName: preview.groupName,
+                      groupId: preview.groupId,
+                      connectHost: preview.connectHost,
+                      entryHost: preview.entryHost,
+                      suggestedName: nameCtrl.text.trim().isEmpty
+                          ? preview.suggestedName
+                          : nameCtrl.text.trim(),
+                      port: preview.port,
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('auto-group-assign-confirm'),
+            onPressed: () {
+              Navigator.pop(
+                ctx,
+                AutoGroupAssignPreview(
+                  groupName: preview.groupName,
+                  groupId: preview.groupId,
+                  connectHost: preview.connectHost,
+                  entryHost: preview.entryHost,
+                  suggestedName: nameCtrl.text.trim().isEmpty
+                      ? preview.suggestedName
+                      : nameCtrl.text.trim(),
+                  port: preview.port,
+                ),
+              );
+            },
+            child: const Text('Confirm'),
+          ),
+        ],
+      );
+    },
+  ).whenComplete(nameCtrl.dispose);
+}
+
+/// Result of [showGroupPickDialog].
+class GroupPickResult {
+  const GroupPickResult.profile(this.profileId) : createProfile = false;
+  const GroupPickResult.createProfile()
+      : profileId = null,
+        createProfile = true;
+
+  final String? profileId;
+  final bool createProfile;
+}
+
+/// Pick a group with a Domain, or choose Create profile.
+Future<GroupPickResult?> showGroupPickDialog(
+  BuildContext context, {
+  required List<ConnectionProfileCard> profiles,
+  required String hostLabel,
+  bool offerCreateProfile = true,
+}) {
+  final choices = profilesWithDomain(profiles);
+  return showDialog<GroupPickResult>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) {
+      return AlertDialog(
+        key: const Key('group-pick-dialog'),
+        title: const Text('Select a group'),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Choose a group for “$hostLabel”.',
+                style: Theme.of(ctx).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 12),
+              if (choices.isEmpty)
+                Text(
+                  'No groups with a Domain yet.',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                )
+              else
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 280),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: choices.length,
+                    itemBuilder: (_, i) {
+                      final p = choices[i];
+                      return ListTile(
+                        key: Key('group-pick-${p.id}'),
+                        title: Text(p.name),
+                        subtitle: Text('*.${normalizeDomain(p.domain)}'),
+                        onTap: () => Navigator.pop(
+                          ctx,
+                          GroupPickResult.profile(p.id),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          if (offerCreateProfile)
+            TextButton(
+              key: const Key('group-pick-create-profile'),
+              onPressed: () => Navigator.pop(
+                ctx,
+                const GroupPickResult.createProfile(),
+              ),
+              child: const Text('Create profile…'),
+            ),
+        ],
+      );
+    },
+  );
 }
 
 /// Profile option for Properties / New Connection dropdowns.
@@ -62,6 +233,8 @@ Future<ConnectionEditorResult?> showNewConnectionDialog(
   List<ConnectionProfileCard> profileCards = const [],
   String? initialProfileId,
   ConnectionProfileCard? prefillProfile,
+  Future<ConnectionProfileCard?> Function([ConnectionProfileCard? existing])?
+      onCreateProfile,
 }) {
   return showDialog<ConnectionEditorResult>(
     context: context,
@@ -72,6 +245,7 @@ Future<ConnectionEditorResult?> showNewConnectionDialog(
       profileCards: profileCards,
       initialProfileId: initialProfileId,
       prefillProfile: prefillProfile,
+      onCreateProfile: onCreateProfile,
     ),
   );
 }
@@ -129,6 +303,7 @@ class _NewConnectionDialog extends StatefulWidget {
     this.profileCards = const [],
     this.initialProfileId,
     this.prefillProfile,
+    this.onCreateProfile,
   });
 
   final ICredentialStore credentials;
@@ -136,6 +311,8 @@ class _NewConnectionDialog extends StatefulWidget {
   final List<ConnectionProfileCard> profileCards;
   final String? initialProfileId;
   final ConnectionProfileCard? prefillProfile;
+  final Future<ConnectionProfileCard?> Function([ConnectionProfileCard? existing])?
+      onCreateProfile;
 
   @override
   State<_NewConnectionDialog> createState() => _NewConnectionDialogState();
@@ -150,6 +327,8 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
   String? _error;
   /// null = Auto, '__none__' = None, else profile id.
   String? _profileKey;
+  late List<ConnectionProfileCard> _profileCards;
+  late List<ProfileChoice> _profiles;
 
   // Carried from Options (Properties) if user opened it.
   Map<String, dynamic>? _extra;
@@ -160,6 +339,8 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
   @override
   void initState() {
     super.initState();
+    _profileCards = List.of(widget.profileCards);
+    _profiles = List.of(widget.profiles);
     _profileKey = widget.initialProfileId;
     final prefill = widget.prefillProfile ?? _cardForKey(_profileKey);
     if (prefill != null) {
@@ -170,7 +351,7 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
   ConnectionProfileCard? _cardForKey(String? key) {
     if (key == null || key == '__none__') return null;
     if (widget.prefillProfile?.id == key) return widget.prefillProfile;
-    for (final c in widget.profileCards) {
+    for (final c in _profileCards) {
       if (c.id == key) return c;
     }
     return null;
@@ -202,43 +383,39 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
   }
 
   Map<String, dynamic>? _buildEntry() {
-    final parsed = tryParseVncAddress(_server.text);
-    if (parsed == null) {
-      setState(() => _error = 'Enter host, host:display, or host::port');
+    final resolved = resolveNewConnectionHost(
+      rawInput: _server.text,
+      profiles: _profileCards,
+      profileKey: _profileKey,
+    );
+    if (resolved.error != null || resolved.target == null) {
+      setState(() => _error = resolved.error ?? 'Invalid VNC address');
+      return null;
+    }
+    // Pending pick/create — not ready to build an entry yet.
+    if (resolved.target!.intent == QuickConnectIntent.needGroupPick ||
+        resolved.target!.intent == QuickConnectIntent.needCreateProfile) {
+      setState(() => _error = 'Select a group for this host');
       return null;
     }
     setState(() => _error = null);
 
+    final t = resolved.target!;
     final profileNone = _profileKey == '__none__';
-    final profileId =
-        (!profileNone && _profileKey != null && _profileKey!.isNotEmpty)
-            ? _profileKey
-            : null;
-    final card = _cardForKey(_profileKey);
-    final domain = card?.domain ?? '';
-
-    var host = parsed.host;
-    if (normalizeDomain(domain).isNotEmpty) {
-      host = shortHost(host, domain);
-      if (host.isEmpty) host = parsed.host;
-    }
-    var port = parsed.port;
-    int? displayNumber = parsed.displayNumber;
-    if (displayNumber == null && card?.defaultDisplay != null) {
-      final def = card!.defaultDisplay!;
-      displayNumber = def;
-      port = portFromDisplay(def);
-    }
-    final connectHost =
-        normalizeDomain(domain).isNotEmpty ? qualifyHost(host, domain) : host;
+    final profileId = profileNone
+        ? null
+        : (t.profileId ??
+            (_profileKey != null && _profileKey!.isNotEmpty
+                ? _profileKey
+                : null));
 
     final base = <String, dynamic>{
-      'id': sessionKey(connectHost, port),
-      'host': host,
-      'port': port,
-      if (displayNumber != null) 'display_number': displayNumber,
+      'id': sessionKey(t.connectHost, t.port),
+      'host': t.entryHost,
+      'port': t.port,
+      if (t.displayNumber != null) 'display_number': t.displayNumber,
       'display_name': _name.text.trim().isEmpty
-          ? displayNameFromHost(host)
+          ? displayNameFromHost(t.entryHost)
           : _name.text.trim(),
       'prefer_vencrypt': _preferVencrypt,
       'accept_invalid_certs': _acceptInvalidCerts,
@@ -255,8 +432,8 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
         ..._extra!,
         ...base,
         'id': base['id'],
-        'host': host,
-        'port': port,
+        'host': t.entryHost,
+        'port': t.port,
         if (profileId != null) 'profile_id': profileId,
         'profile_none': profileNone,
       };
@@ -264,9 +441,144 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
     return base;
   }
 
-  void _pop({required bool connect}) {
+  String? _serverHelperText() {
+    final resolved = resolveNewConnectionHost(
+      rawInput: _server.text,
+      profiles: _profileCards,
+      profileKey: _profileKey,
+    );
+    if (resolved.target != null) {
+      final t = resolved.target!;
+      if (t.intent == QuickConnectIntent.needGroupPick) {
+        return 'Select a group to qualify this host';
+      }
+      if (t.intent == QuickConnectIntent.needCreateProfile) {
+        return 'Create a profile with a Domain first';
+      }
+      if (t.connectHost != t.entryHost || t.entryHost.contains('.')) {
+        return 'Will connect to ${t.connectHost}';
+      }
+      final card = _cardForKey(_profileKey ?? t.profileId);
+      final d = card?.domain;
+      if (d != null && normalizeDomain(d).isNotEmpty) {
+        return 'Will connect to ${qualifyHost(t.entryHost, d)}';
+      }
+      return 'Will connect to ${t.connectHost}';
+    }
+    final domain = _cardForKey(_profileKey)?.domain;
+    if (domain != null && normalizeDomain(domain).isNotEmpty) {
+      return 'Short host qualifies as *.${normalizeDomain(domain)}';
+    }
+    return null;
+  }
+
+  Future<void> _pop({required bool connect}) async {
+    var fromPicker = false;
+    for (;;) {
+      final resolved = resolveNewConnectionHost(
+        rawInput: _server.text,
+        profiles: _profileCards,
+        profileKey: _profileKey,
+      );
+      if (resolved.error != null || resolved.target == null) {
+        setState(() => _error = resolved.error ?? 'Invalid VNC address');
+        return;
+      }
+      final t = resolved.target!;
+
+      if (_profileKey == null &&
+          (t.intent == QuickConnectIntent.needGroupPick ||
+              t.intent == QuickConnectIntent.needCreateProfile)) {
+        final pick = await showGroupPickDialog(
+          context,
+          profiles: _profileCards,
+          hostLabel: t.connectHost,
+        );
+        if (pick == null || !mounted) return;
+        if (pick.createProfile) {
+          final create = widget.onCreateProfile;
+          if (create == null) {
+            setState(() {
+              _error = 'Create a profile from the sidebar first';
+            });
+            return;
+          }
+          final created = await create();
+          if (created == null || !mounted) return;
+          if (normalizeDomain(created.domain).isEmpty) {
+            setState(() {
+              _error = '“${created.name}” has no Domain — edit the profile';
+            });
+            return;
+          }
+          setState(() {
+            _profileCards = [..._profileCards, created];
+            _profiles = [
+              ..._profiles.where((p) => p.id != created.id),
+              ProfileChoice.named(
+                created.id,
+                created.name,
+                domain: created.domain,
+              ),
+            ];
+            _profileKey = created.id;
+            _applyProfile(created);
+          });
+          fromPicker = true;
+          continue;
+        }
+        setState(() {
+          _profileKey = pick.profileId;
+          final card = _cardForKey(pick.profileId);
+          if (card != null) _applyProfile(card);
+        });
+        fromPicker = true;
+        continue;
+      }
+
+      if (_profileKey == null &&
+          t.intent == QuickConnectIntent.confirmAddToGroup) {
+        final preview = autoGroupAssignPreview(
+          target: t,
+          profiles: _profileCards,
+          explicitDisplayName: _name.text,
+        );
+        if (preview != null) {
+          final confirmed = await showAutoGroupAssignConfirm(
+            context,
+            preview: preview,
+          );
+          if (confirmed == null || !mounted) return;
+          _name.text = confirmed.suggestedName;
+          _profileKey = confirmed.groupId;
+        }
+      } else if (fromPicker && t.profileId != null) {
+        final preview = groupAssignPreviewFor(
+          target: t,
+          profiles: _profileCards,
+          explicitDisplayName: _name.text,
+        );
+        if (preview != null) {
+          final confirmed = await showAutoGroupAssignConfirm(
+            context,
+            preview: preview,
+          );
+          if (confirmed == null || !mounted) return;
+          _name.text = confirmed.suggestedName;
+          _profileKey = confirmed.groupId;
+        }
+      }
+
+      break;
+    }
+
     final entry = _buildEntry();
     if (entry == null) return;
+    final host = (entry['host'] as String?)?.trim() ?? '';
+    if (host.isEmpty) {
+      setState(() => _error = 'Hostname is empty — check VNC Server');
+      return;
+    }
     Navigator.pop(
       context,
       ConnectionEditorResult(
@@ -285,7 +597,7 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
       context,
       draft: draft,
       credentials: widget.credentials,
-      profiles: widget.profiles,
+      profiles: _profiles,
     );
     if (result == null || !mounted) return;
     setState(() {
@@ -323,14 +635,10 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
     final profileItems = <DropdownMenuItem<String?>>[
       const DropdownMenuItem(value: null, child: Text('Auto')),
       const DropdownMenuItem(value: '__none__', child: Text('None')),
-      ...widget.profiles.where((p) => p.id != null).map(
+      ..._profiles.where((p) => p.id != null).map(
             (p) => DropdownMenuItem(value: p.id, child: Text(p.label)),
           ),
     ];
-    final domain = _cardForKey(_profileKey)?.domain;
-    final domainHint = (domain != null && normalizeDomain(domain).isNotEmpty)
-        ? 'Short host qualifies as *.${normalizeDomain(domain)}'
-        : null;
 
     return AlertDialog(
       title: const Text('New Connection'),
@@ -348,7 +656,7 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
                   labelText: 'VNC Server',
                   hintText: 'host, host:1, or host::5900',
                   errorText: _error,
-                  helperText: domainHint,
+                  helperText: _error == null ? _serverHelperText() : null,
                 ),
                 onChanged: (_) => setState(() => _error = null),
                 onSubmitted: (_) => _pop(connect: true),

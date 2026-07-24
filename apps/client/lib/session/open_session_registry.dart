@@ -98,6 +98,14 @@ class OpenSessionRegistry {
   }
 
   void add(OpenSessionRef ref) {
+    final byId = findBySessionId(ref.id);
+    if (byId != null &&
+        (byId.host != ref.host || byId.port != ref.port)) {
+      // Same native id, different host — replace so ValueKeys stay unique.
+      final i = _items.indexWhere((s) => s.id == ref.id);
+      if (i >= 0) _items[i] = ref;
+      return;
+    }
     final existing = findByHostPort(ref.host, ref.port);
     if (existing != null) {
       final i = _items.indexWhere((s) => s.id == existing.id);

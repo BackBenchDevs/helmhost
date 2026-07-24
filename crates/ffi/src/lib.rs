@@ -4,9 +4,11 @@
 #![allow(clippy::missing_safety_doc)]
 
 use helmhost_core::{
-    ConnectTarget, ConnectionEntry, ConnectionProfile, ConnectionRegistry, Creds, InputFocus,
-    KeyEvent, PointerEvent, SessionCommand, SessionEvent, SessionHandle, SessionId, SessionManager,
+    ConnectionEntry, ConnectionProfile, ConnectionRegistry, Creds, InputFocus, KeyEvent,
+    PointerEvent, SessionCommand, SessionEvent, SessionHandle, SessionId, SessionManager,
 };
+use helmhost_rfb::encodings_with_quality_compress;
+use helmhost_rfb::session::connect_tcp;
 use helmhost_rfb::RfbSessionFactory;
 use helmhost_rfb::TlsOptions;
 use once_cell::sync::Lazy;
@@ -219,29 +221,32 @@ pub extern "C" fn hh_connect(
     );
 
     let result = RT.block_on(async {
-        // Connect on a local factory so we never hold STATE across await.
-        let mut factory = RfbSessionFactory::new();
-        factory.configure_connect(tls.clone(), prefer);
-        factory.configure_bandwidth(bandwidth, quality, compress);
-        use helmhost_core::SessionFactory;
-        let handle = factory
-            .connect(
-                ConnectTarget {
-                    host: host.clone(),
-                    port,
-                },
-                Creds { username, password },
-            )
-            .await?;
+        // Alloc id from global manager (brief lock). Never use a fresh
+        // RfbSessionFactory here — that always restarts at id=1 and
+        // collapses multi-tab Flutter ValueKeys.
+        let id = {
+            let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
+            state.factory.configure_connect(tls.clone(), prefer);
+            state
+                .factory
+                .configure_bandwidth(bandwidth, quality, compress);
+            state.manager.alloc_id()
+        };
+        let encodings = encodings_with_quality_compress(bandwidth, quality, compress);
+        let handle = connect_tcp(
+            id,
+            &host,
+            port,
+            Creds { username, password },
+            tls,
+            prefer,
+            &encodings,
+        )
+        .await?;
 
         let mut state = STATE.lock().map_err(|_| "lock".to_string())?;
-        state.factory.configure_connect(tls, prefer);
-        state
-            .factory
-            .configure_bandwidth(bandwidth, quality, compress);
-        let id = handle.id.0;
         state.manager.insert(handle.id, handle.commands.clone());
-        state.sessions.insert(id, handle);
+        state.sessions.insert(id.0, handle);
         let entry_id = format!("{host}:{port}");
         let prev = state.registry.get(&entry_id).cloned();
         let mut entry =
@@ -266,7 +271,7 @@ pub extern "C" fn hh_connect(
         if let Some(path) = state.registry_path.clone() {
             let _ = state.registry.save_to_path(&path);
         }
-        Ok::<_, String>(id)
+        Ok::<_, String>(id.0)
     });
 
     match result {
@@ -832,6 +837,20 @@ mod tests {
         focus.grab(SessionId(7));
         assert!(focus.allows(SessionId(7)));
         assert!(!focus.allows(SessionId(8)));
+    }
+
+    /// Regression: hh_connect must alloc from global STATE.manager, not a
+    /// fresh RfbSessionFactory (which always restarts at 1).
+    #[test]
+    fn global_manager_allocates_distinct_session_ids() {
+        let (a, b) = {
+            let mut state = STATE.lock().expect("lock");
+            let a = state.manager.alloc_id();
+            let b = state.manager.alloc_id();
+            (a, b)
+        };
+        assert_ne!(a, b, "two allocs must not collide (Flutter tab keys)");
+        assert_eq!(a.0 + 1, b.0);
     }
 
     #[test]

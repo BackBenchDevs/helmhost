@@ -59,7 +59,7 @@ void main() {
         ),
       ),
     );
-    expect(find.byKey(const ValueKey('chrome-tab-1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('chrome-tab-1-h0:5900')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -91,6 +91,39 @@ void main() {
     expect(plusLeft, greaterThan(tabLeft));
     // Not pinned to the far right of a wide strip.
     expect(plusLeft, lessThan(stripRight - 120));
+  });
+
+  testWidgets('+ stays after all tabs when first tab is active', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 800,
+            child: ChromeTabStrip(
+              sessions: [tab(1, 'electra'), tab(2, 'kgf')],
+              activeSessionId: 1,
+              libraryOverlayOpen: false,
+              onToggleLibrary: () {},
+              onSelect: (_) {},
+              onClose: (_) {},
+              onDetach: (_) {},
+              onNewConnection: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    final firstRight = tester
+        .getBottomRight(find.byKey(const ValueKey('chrome-tab-1-electra:5900')))
+        .dx;
+    final lastRight = tester
+        .getBottomRight(find.byKey(const ValueKey('chrome-tab-2-kgf:5900')))
+        .dx;
+    final plusLeft =
+        tester.getTopLeft(find.byKey(const Key('chrome-tab-new'))).dx;
+    // After every tab — not between active (first) and the rest.
+    expect(plusLeft, greaterThanOrEqualTo(lastRight));
+    expect(plusLeft, greaterThan(firstRight));
   });
 
   testWidgets('hover shows overview then clears on exit', (tester) async {

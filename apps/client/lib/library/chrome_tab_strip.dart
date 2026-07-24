@@ -7,6 +7,9 @@ import '../session/session_overview.dart';
 import '../session_helpers.dart';
 
 /// Chrome-order tab strip: Library toggle + curved session tabs + new (WF-04).
+///
+/// The `+` control is always the last child after every session tab (hugs the
+/// last tab). It must never sit after the active tab only or between tabs.
 class ChromeTabStrip extends StatefulWidget {
   const ChromeTabStrip({
     super.key,
@@ -154,7 +157,7 @@ class _ChromeTabStripState extends State<ChromeTabStrip> {
                   children: [
                     for (final s in widget.sessions)
                       _ChromeTab(
-                        key: ValueKey('chrome-tab-${s.id}'),
+                        key: ValueKey('chrome-tab-${s.id}-${s.key}'),
                         label: effectiveDisplayName(host: s.host),
                         tooltip: s.key,
                         selected: !widget.libraryOverlayOpen &&

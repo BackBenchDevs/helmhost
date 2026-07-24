@@ -3,15 +3,23 @@ import 'package:flutter/material.dart';
 import '../session_helpers.dart';
 import '../ui/app_about.dart';
 
+IconData _gridSizeIcon(LibraryGridSize size) => switch (size) {
+      LibraryGridSize.small => Icons.photo_size_select_small,
+      LibraryGridSize.medium => Icons.photo_size_select_large,
+      LibraryGridSize.large => Icons.photo_size_select_actual,
+    };
+
 /// Compact VS Code–style status strip for the Library hub chrome.
 class LibraryStatusBar extends StatelessWidget {
   const LibraryStatusBar({
     super.key,
     required this.sessionShell,
     required this.viewMode,
+    required this.gridSize,
     required this.themeMode,
     required this.onToggleShell,
     required this.onToggleView,
+    required this.onCycleGridSize,
     required this.onCycleTheme,
     required this.onImport,
     required this.onExport,
@@ -23,9 +31,11 @@ class LibraryStatusBar extends StatelessWidget {
 
   final SessionShell sessionShell;
   final LibraryViewMode viewMode;
+  final LibraryGridSize gridSize;
   final ThemeMode themeMode;
   final VoidCallback onToggleShell;
   final VoidCallback onToggleView;
+  final VoidCallback onCycleGridSize;
   final VoidCallback onCycleTheme;
   final VoidCallback onImport;
   final VoidCallback onExport;
@@ -38,6 +48,7 @@ class LibraryStatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final gridActive = viewMode == LibraryViewMode.grid;
     return Material(
       color: scheme.surfaceContainerHighest,
       child: SafeArea(
@@ -95,6 +106,18 @@ class LibraryStatusBar extends StatelessWidget {
                       ? Icons.view_list
                       : Icons.grid_view,
                 ),
+              ),
+              IconButton(
+                key: const Key('library-grid-size'),
+                tooltip: gridActive
+                    ? 'Grid size: ${gridSize.label} (click for ${gridSize.next.label})'
+                    : 'Grid size (switch to grid view)',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
+                iconSize: 16,
+                onPressed: gridActive ? onCycleGridSize : null,
+                icon: Icon(_gridSizeIcon(gridSize)),
               ),
               IconButton(
                 tooltip: 'Theme',

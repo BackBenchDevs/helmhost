@@ -26,6 +26,8 @@ Widget _hub({
         onThemeModeChanged: (_) async {},
         viewMode: LibraryViewMode.grid,
         onViewModeChanged: (_) async {},
+        gridSize: LibraryGridSize.medium,
+        onGridSizeChanged: (_) async {},
         sessionShell: shell,
         onSessionShellChanged: (_) async {},
         prefs: prefs,

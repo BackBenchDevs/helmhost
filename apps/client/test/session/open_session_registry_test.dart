@@ -22,6 +22,15 @@ void main() {
       expect(reg.items.single.shell, SessionShell.tabs);
     });
 
+    test('duplicate session id replaces prior host', () {
+      final reg = OpenSessionRegistry();
+      reg.add(const OpenSessionRef(id: 1, host: 'grog', port: 5901));
+      reg.add(const OpenSessionRef(id: 1, host: 'lhotse', port: 5901));
+      expect(reg.length, 1);
+      expect(reg.items.single.host, 'lhotse');
+      expect(reg.findBySessionId(1)?.host, 'lhotse');
+    });
+
     test('find and replace', () {
       final reg = OpenSessionRegistry();
       reg.add(const OpenSessionRef(id: 7, host: 'grog', port: 5901));
