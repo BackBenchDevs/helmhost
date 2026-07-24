@@ -60,6 +60,7 @@ class LibraryCard {
     this.bandwidthPreset = BandwidthPreset.balanced,
     this.qualityLevel,
     this.compressLevel,
+    this.favorite = false,
   });
 
   final String id;
@@ -81,6 +82,7 @@ class LibraryCard {
   final BandwidthPreset bandwidthPreset;
   final int? qualityLevel;
   final int? compressLevel;
+  final bool favorite;
 
   String get title =>
       effectiveDisplayName(displayName: displayName, host: host);
@@ -119,6 +121,7 @@ class LibraryCard {
           BandwidthPresetX.fromPrefs(j['bandwidth_preset'] as String?),
       qualityLevel: (j['quality_level'] as num?)?.toInt(),
       compressLevel: (j['compress_level'] as num?)?.toInt(),
+      favorite: j['favorite'] as bool? ?? false,
     );
   }
 
@@ -141,7 +144,53 @@ class LibraryCard {
         'bandwidth_preset': bandwidthPreset.prefsKey,
         if (qualityLevel != null) 'quality_level': qualityLevel,
         if (compressLevel != null) 'compress_level': compressLevel,
+        'favorite': favorite,
       };
+
+  LibraryCard copyWith({
+    String? id,
+    String? host,
+    int? port,
+    String? displayName,
+    int? displayNumber,
+    List<String>? tags,
+    int? lastConnectedAt,
+    String? thumbPath,
+    String? username,
+    bool? preferVencrypt,
+    bool? acceptInvalidCerts,
+    bool? viewOnly,
+    String? notes,
+    String? profileId,
+    bool? profileNone,
+    int? openSessionId,
+    BandwidthPreset? bandwidthPreset,
+    int? qualityLevel,
+    int? compressLevel,
+    bool? favorite,
+  }) =>
+      LibraryCard(
+        id: id ?? this.id,
+        host: host ?? this.host,
+        port: port ?? this.port,
+        displayName: displayName ?? this.displayName,
+        displayNumber: displayNumber ?? this.displayNumber,
+        tags: tags ?? this.tags,
+        lastConnectedAt: lastConnectedAt ?? this.lastConnectedAt,
+        thumbPath: thumbPath ?? this.thumbPath,
+        username: username ?? this.username,
+        preferVencrypt: preferVencrypt ?? this.preferVencrypt,
+        acceptInvalidCerts: acceptInvalidCerts ?? this.acceptInvalidCerts,
+        viewOnly: viewOnly ?? this.viewOnly,
+        notes: notes ?? this.notes,
+        profileId: profileId ?? this.profileId,
+        profileNone: profileNone ?? this.profileNone,
+        openSessionId: openSessionId ?? this.openSessionId,
+        bandwidthPreset: bandwidthPreset ?? this.bandwidthPreset,
+        qualityLevel: qualityLevel ?? this.qualityLevel,
+        compressLevel: compressLevel ?? this.compressLevel,
+        favorite: favorite ?? this.favorite,
+      );
 
   String get searchHaystack => [
         title,
@@ -359,6 +408,154 @@ extension LibraryGridSizeX on LibraryGridSize {
         LibraryGridSize.large => LibraryGridSize.small,
       };
 }
+
+// ---------------------------------------------------------------------------
+// Library sort
+// ---------------------------------------------------------------------------
+
+enum LibrarySort { name, host, lastConnected, openFirst }
+
+extension LibrarySortX on LibrarySort {
+  String get label => switch (this) {
+        LibrarySort.name => 'Name',
+        LibrarySort.host => 'Host',
+        LibrarySort.lastConnected => 'Last connected',
+        LibrarySort.openFirst => 'Open first',
+      };
+
+  String get prefsKey => switch (this) {
+        LibrarySort.name => 'name',
+        LibrarySort.host => 'host',
+        LibrarySort.lastConnected => 'last_connected',
+        LibrarySort.openFirst => 'open_first',
+      };
+
+  LibrarySort get next => switch (this) {
+        LibrarySort.name => LibrarySort.host,
+        LibrarySort.host => LibrarySort.lastConnected,
+        LibrarySort.lastConnected => LibrarySort.openFirst,
+        LibrarySort.openFirst => LibrarySort.name,
+      };
+
+  static LibrarySort fromPrefs(String? v) => switch (v) {
+        'host' => LibrarySort.host,
+        'last_connected' => LibrarySort.lastConnected,
+        'open_first' => LibrarySort.openFirst,
+        _ => LibrarySort.name,
+      };
+}
+
+List<LibraryCard> sortLibraryCards(
+  Iterable<LibraryCard> cards,
+  LibrarySort sort, {
+  bool favoritesFirst = true,
+}) {
+  final list = cards.toList();
+  list.sort((a, b) {
+    if (favoritesFirst) {
+      final fav = (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0);
+      if (fav != 0) return fav;
+    }
+    switch (sort) {
+      case LibrarySort.name:
+        return a.title.compareTo(b.title);
+      case LibrarySort.host:
+        final h = a.host.compareTo(b.host);
+        return h != 0 ? h : a.port.compareTo(b.port);
+      case LibrarySort.lastConnected:
+        final at = b.lastConnectedAt ?? -1;
+        final bt = a.lastConnectedAt ?? -1;
+        return at.compareTo(bt);
+      case LibrarySort.openFirst:
+        final o = (b.isOpen ? 1 : 0) - (a.isOpen ? 1 : 0);
+        return o != 0 ? o : a.title.compareTo(b.title);
+    }
+  });
+  return list;
+}
+
+/// Collect all unique tags from [cards], sorted alphabetically.
+List<String> collectLibraryTags(Iterable<LibraryCard> cards) {
+  final seen = <String>{};
+  final result = <String>[];
+  for (final c in cards) {
+    for (final t in c.tags) {
+      if (seen.add(t)) result.add(t);
+    }
+  }
+  result.sort();
+  return result;
+}
+
+List<LibraryCard> filterLibraryCardsByTag(
+  Iterable<LibraryCard> cards,
+  String tag,
+) =>
+    cards.where((c) => c.tags.contains(tag)).toList();
+
+// ---------------------------------------------------------------------------
+// Thumb refresh rate
+// ---------------------------------------------------------------------------
+
+enum LibraryThumbRefresh { off, slow, normal }
+
+extension LibraryThumbRefreshX on LibraryThumbRefresh {
+  String get prefsKey => switch (this) {
+        LibraryThumbRefresh.off => 'off',
+        LibraryThumbRefresh.slow => 'slow',
+        LibraryThumbRefresh.normal => 'normal',
+      };
+
+  String get label => switch (this) {
+        LibraryThumbRefresh.off => 'Off',
+        LibraryThumbRefresh.slow => 'Slow (5 s)',
+        LibraryThumbRefresh.normal => 'Normal (1 s)',
+      };
+
+  LibraryThumbRefresh get next => switch (this) {
+        LibraryThumbRefresh.off => LibraryThumbRefresh.slow,
+        LibraryThumbRefresh.slow => LibraryThumbRefresh.normal,
+        LibraryThumbRefresh.normal => LibraryThumbRefresh.off,
+      };
+
+  /// Null when off; otherwise the poll interval in milliseconds.
+  int? get thumbRefreshIntervalMs => switch (this) {
+        LibraryThumbRefresh.off => null,
+        LibraryThumbRefresh.slow => 5000,
+        LibraryThumbRefresh.normal => 1000,
+      };
+
+  static LibraryThumbRefresh fromPrefs(String? v) => switch (v) {
+        'off' => LibraryThumbRefresh.off,
+        'slow' => LibraryThumbRefresh.slow,
+        _ => LibraryThumbRefresh.normal,
+      };
+}
+
+// ---------------------------------------------------------------------------
+// Grid layout helpers
+// ---------------------------------------------------------------------------
+
+EdgeInsets libraryGridFooterPadding(LibraryGridSize size) =>
+    size == LibraryGridSize.small
+        ? const EdgeInsets.fromLTRB(6, 4, 6, 4)
+        : const EdgeInsets.fromLTRB(8, 6, 8, 6);
+
+TextStyle libraryGridTitleStyle(LibraryGridSize size) => TextStyle(
+      fontSize: size == LibraryGridSize.small ? 11.5 : 13.0,
+      fontWeight: FontWeight.w500,
+    );
+
+/// Clamp a custom grid extent to [160, 400], or null if [extent] is null.
+double? clampLibraryGridExtent(double? extent) =>
+    extent?.clamp(160.0, 400.0);
+
+/// Effective max cross-axis extent: clamped [extent] if set, else [size] default.
+double effectiveMaxCrossAxisExtent({
+  required LibraryGridSize size,
+  double? extent,
+}) =>
+    clampLibraryGridExtent(extent) ?? size.maxCrossAxisExtent;
 
 String normalizeDomain(String domain) => domain
     .trim()

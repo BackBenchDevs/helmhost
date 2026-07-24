@@ -19,10 +19,18 @@ class LibraryStatusBar extends StatelessWidget {
     required this.themeMode,
     required this.onToggleShell,
     required this.onToggleView,
-    required this.onCycleGridSize,
+    required this.onGridSizeChanged,
     required this.onCycleTheme,
     required this.onImport,
     required this.onExport,
+    this.sort = LibrarySort.name,
+    this.onSortChanged,
+    this.thumbRefresh = LibraryThumbRefresh.normal,
+    this.onThumbRefreshChanged,
+    this.gridExtent,
+    this.onGridExtentChanged,
+    this.connectionCount,
+    this.connectionTotal,
     this.coreVersion,
     this.statusMessage,
     this.onCheckUpdates,
@@ -35,20 +43,92 @@ class LibraryStatusBar extends StatelessWidget {
   final ThemeMode themeMode;
   final VoidCallback onToggleShell;
   final VoidCallback onToggleView;
-  final VoidCallback onCycleGridSize;
+  final ValueChanged<LibraryGridSize> onGridSizeChanged;
   final VoidCallback onCycleTheme;
   final VoidCallback onImport;
   final VoidCallback onExport;
+  final LibrarySort sort;
+  final ValueChanged<LibrarySort>? onSortChanged;
+  final LibraryThumbRefresh thumbRefresh;
+  final ValueChanged<LibraryThumbRefresh>? onThumbRefreshChanged;
+  final double? gridExtent;
+  final ValueChanged<double?>? onGridExtentChanged;
+  final int? connectionCount;
+  final int? connectionTotal;
   final String? coreVersion;
-  /// Optional note after the version (e.g. bridge error).
   final String? statusMessage;
   final VoidCallback? onCheckUpdates;
   final VoidCallback? onUninstall;
+
+  Future<void> _showCustomExtentDialog(
+    BuildContext context,
+    double currentExtent,
+  ) async {
+    var value = currentExtent.clamp(160.0, 400.0);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Custom grid size'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${value.round()} px',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+              Slider(
+                value: value,
+                min: 160,
+                max: 400,
+                divisions: 48,
+                label: '${value.round()} px',
+                onChanged: (v) => setState(() => value = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                onGridExtentChanged!(null);
+                Navigator.pop(ctx);
+              },
+              child: const Text('Reset to preset'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                onGridExtentChanged!(value);
+                Navigator.pop(ctx);
+              },
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final gridActive = viewMode == LibraryViewMode.grid;
+    final cc = connectionCount;
+    final ct = connectionTotal;
+
+    String? countText;
+    if (cc != null) {
+      countText = (ct != null && ct != cc)
+          ? '$cc of $ct'
+          : '$cc ${cc == 1 ? 'connection' : 'connections'}';
+    }
+
+    const btnConstraints = BoxConstraints(minWidth: 28, minHeight: 26);
+    const iconSize = 16.0;
+
     return Material(
       color: scheme.surfaceContainerHighest,
       child: SafeArea(
@@ -59,9 +139,27 @@ class LibraryStatusBar extends StatelessWidget {
             children: [
               const SizedBox(width: 8),
               Expanded(
-                child: AppVersionChip(
-                  coreVersion: coreVersion,
-                  message: statusMessage,
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: AppVersionChip(
+                        coreVersion: coreVersion,
+                        message: statusMessage,
+                      ),
+                    ),
+                    if (countText != null) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        '· $countText',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               IconButton(
@@ -69,8 +167,8 @@ class LibraryStatusBar extends StatelessWidget {
                 tooltip: 'About / Help',
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                iconSize: 16,
+                constraints: btnConstraints,
+                iconSize: iconSize,
                 onPressed: () => showAppAbout(
                   context: context,
                   coreVersion: coreVersion,
@@ -83,8 +181,8 @@ class LibraryStatusBar extends StatelessWidget {
                     : 'Session shell: Windows (click for Tabs)',
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                iconSize: 16,
+                constraints: btnConstraints,
+                iconSize: iconSize,
                 onPressed: onToggleShell,
                 icon: Icon(
                   sessionShell == SessionShell.tabs
@@ -98,8 +196,8 @@ class LibraryStatusBar extends StatelessWidget {
                     : 'Grid view',
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                iconSize: 16,
+                constraints: btnConstraints,
+                iconSize: iconSize,
                 onPressed: onToggleView,
                 icon: Icon(
                   viewMode == LibraryViewMode.grid
@@ -107,24 +205,100 @@ class LibraryStatusBar extends StatelessWidget {
                       : Icons.grid_view,
                 ),
               ),
-              IconButton(
-                key: const Key('library-grid-size'),
-                tooltip: gridActive
-                    ? 'Grid size: ${gridSize.label} (click for ${gridSize.next.label})'
-                    : 'Grid size (switch to grid view)',
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                iconSize: 16,
-                onPressed: gridActive ? onCycleGridSize : null,
-                icon: Icon(_gridSizeIcon(gridSize)),
-              ),
+              if (gridActive)
+                PopupMenuButton<String>(
+                  key: const Key('library-grid-size'),
+                  tooltip: 'Grid size: ${gridSize.label}',
+                  icon: Icon(_gridSizeIcon(gridSize), size: iconSize),
+                  padding: EdgeInsets.zero,
+                  constraints: btnConstraints,
+                  iconSize: iconSize,
+                  onSelected: (v) async {
+                    if (v == 'custom') {
+                      await _showCustomExtentDialog(
+                        context,
+                        gridExtent ?? gridSize.maxCrossAxisExtent,
+                      );
+                      return;
+                    }
+                    if (v == 'reset') {
+                      onGridExtentChanged?.call(null);
+                      return;
+                    }
+                    final size = LibraryGridSize.values
+                        .firstWhere((s) => s.name == v);
+                    onGridSizeChanged(size);
+                    onGridExtentChanged?.call(null);
+                  },
+                  itemBuilder: (_) => [
+                    for (final s in LibraryGridSize.values)
+                      CheckedPopupMenuItem(
+                        value: s.name,
+                        checked: gridSize == s && gridExtent == null,
+                        child: Text(s.label),
+                      ),
+                    if (onGridExtentChanged != null) ...[
+                      const PopupMenuDivider(),
+                      CheckedPopupMenuItem(
+                        value: 'custom',
+                        checked: gridExtent != null,
+                        child: Text(gridExtent != null
+                            ? 'Custom (${gridExtent!.round()} px)…'
+                            : 'Custom…'),
+                      ),
+                    ],
+                  ],
+                ),
+              if (onSortChanged != null)
+                PopupMenuButton<String>(
+                  key: const Key('library-sort'),
+                  tooltip: 'Sort: ${sort.label}',
+                  padding: EdgeInsets.zero,
+                  constraints: btnConstraints,
+                  iconSize: iconSize,
+                  icon: const Icon(Icons.sort, size: iconSize),
+                  onSelected: (v) {
+                    final s = LibrarySort.values
+                        .firstWhere((x) => x.name == v);
+                    onSortChanged!(s);
+                  },
+                  itemBuilder: (_) => [
+                    for (final s in LibrarySort.values)
+                      CheckedPopupMenuItem(
+                        value: s.name,
+                        checked: sort == s,
+                        child: Text(s.label),
+                      ),
+                  ],
+                ),
+              if (onThumbRefreshChanged != null)
+                PopupMenuButton<String>(
+                  key: const Key('library-thumb-refresh'),
+                  tooltip: 'Thumbnails: ${thumbRefresh.label}',
+                  padding: EdgeInsets.zero,
+                  constraints: btnConstraints,
+                  iconSize: iconSize,
+                  icon: const Icon(Icons.refresh, size: iconSize),
+                  onSelected: (v) {
+                    final r = LibraryThumbRefresh.values
+                        .firstWhere((x) => x.name == v);
+                    onThumbRefreshChanged!(r);
+                  },
+                  itemBuilder: (_) => [
+                    for (final r in LibraryThumbRefresh.values)
+                      CheckedPopupMenuItem(
+                        value: r.name,
+                        checked: thumbRefresh == r,
+                        child: Text(r.label),
+                      ),
+                  ],
+                ),
               IconButton(
                 tooltip: 'Theme',
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                iconSize: 16,
+                constraints: btnConstraints,
+                iconSize: iconSize,
                 onPressed: onCycleTheme,
                 icon: Icon(switch (themeMode) {
                   ThemeMode.light => Icons.light_mode,
@@ -136,8 +310,8 @@ class LibraryStatusBar extends StatelessWidget {
                 tooltip: 'Import',
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                iconSize: 16,
+                constraints: btnConstraints,
+                iconSize: iconSize,
                 onPressed: onImport,
                 icon: const Icon(Icons.file_download_outlined),
               ),
@@ -145,8 +319,8 @@ class LibraryStatusBar extends StatelessWidget {
                 tooltip: 'Export library',
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                iconSize: 16,
+                constraints: btnConstraints,
+                iconSize: iconSize,
                 onPressed: onExport,
                 icon: const Icon(Icons.file_upload_outlined),
               ),
@@ -155,8 +329,8 @@ class LibraryStatusBar extends StatelessWidget {
                   tooltip: 'Check for Updates…',
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                  iconSize: 16,
+                  constraints: btnConstraints,
+                  iconSize: iconSize,
                   onPressed: onCheckUpdates,
                   icon: const Icon(Icons.system_update_alt),
                 ),
@@ -165,8 +339,8 @@ class LibraryStatusBar extends StatelessWidget {
                   tooltip: 'Uninstall Helmhost…',
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
-                  iconSize: 16,
+                  constraints: btnConstraints,
+                  iconSize: iconSize,
                   onPressed: onUninstall,
                   icon: const Icon(Icons.delete_outline),
                 ),

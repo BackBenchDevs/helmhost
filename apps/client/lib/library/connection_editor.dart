@@ -392,12 +392,12 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
       setState(() => _error = resolved.error ?? 'Invalid VNC address');
       return null;
     }
-    // Pending pick/create — not ready to build an entry yet.
-    if (resolved.target!.intent == QuickConnectIntent.needGroupPick ||
-        resolved.target!.intent == QuickConnectIntent.needCreateProfile) {
+    // Ambiguous (multiple matching domains) — must pick a group first.
+    if (resolved.target!.intent == QuickConnectIntent.needGroupPick) {
       setState(() => _error = 'Select a group for this host');
       return null;
     }
+    // needCreateProfile: allow save without profile (user can add profile later).
     setState(() => _error = null);
 
     final t = resolved.target!;
@@ -489,6 +489,8 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
       if (_profileKey == null &&
           (t.intent == QuickConnectIntent.needGroupPick ||
               t.intent == QuickConnectIntent.needCreateProfile)) {
+        // No profiles at all or no way to create one — connect without profile.
+        if (_profileCards.isEmpty || widget.onCreateProfile == null) break;
         final pick = await showGroupPickDialog(
           context,
           profiles: _profileCards,
@@ -760,6 +762,7 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
   var _preferVencrypt = false;
   var _acceptInvalidCerts = false;
   var _viewOnly = false;
+  var _favorite = false;
   var _loaded = false;
   BandwidthPreset _bandwidthPreset = BandwidthPreset.balanced;
   int? _qualityLevel;
@@ -807,6 +810,7 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
     _compressLevel =
         e?.compressLevel ?? (d?['compress_level'] as num?)?.toInt();
     _savePassword = e != null;
+    _favorite = e?.favorite ?? d?['favorite'] as bool? ?? false;
     if (e?.profileNone == true || d?['profile_none'] == true) {
       _profileKey = '__none__';
     } else if ((e?.profileId ?? d?['profile_id'] as String?) != null) {
@@ -918,6 +922,7 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
         'thumb_path': widget.draft!['thumb_path'],
       if (widget.draft?['last_connected_at'] != null)
         'last_connected_at': widget.draft!['last_connected_at'],
+      'favorite': _favorite,
     };
   }
 
@@ -1068,6 +1073,14 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
                         decoration: const InputDecoration(
                           labelText: 'Tags (comma-separated)',
                         ),
+                      ),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: const Text('Favorite'),
+                        value: _favorite,
+                        onChanged: (v) =>
+                            setState(() => _favorite = v ?? false),
                       ),
                     ],
                   ),

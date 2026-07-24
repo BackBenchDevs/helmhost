@@ -47,6 +47,12 @@ class HubPage extends StatefulWidget {
     required this.onGridSizeChanged,
     required this.sessionShell,
     required this.onSessionShellChanged,
+    this.sort = LibrarySort.name,
+    this.onSortChanged,
+    this.thumbRefresh = LibraryThumbRefresh.normal,
+    this.onThumbRefreshChanged,
+    this.gridExtent,
+    this.onGridExtentChanged,
     this.prefs,
     this.bridge,
     this.credentials,
@@ -61,6 +67,12 @@ class HubPage extends StatefulWidget {
   final ValueChanged<LibraryGridSize> onGridSizeChanged;
   final SessionShell sessionShell;
   final ValueChanged<SessionShell> onSessionShellChanged;
+  final LibrarySort sort;
+  final ValueChanged<LibrarySort>? onSortChanged;
+  final LibraryThumbRefresh thumbRefresh;
+  final ValueChanged<LibraryThumbRefresh>? onThumbRefreshChanged;
+  final double? gridExtent;
+  final ValueChanged<double?>? onGridExtentChanged;
   final AppPrefs? prefs;
   /// Injected for tests; production opens native FFI in [_boot].
   final IHelmBridge? bridge;
@@ -80,6 +92,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
   List<LibraryCard> _cards = [];
   List<ConnectionProfileCard> _profiles = [];
   final _search = TextEditingController();
+  final _searchFocus = FocusNode();
   final _sessions = OpenSessionRegistry();
   bool _connecting = false;
   String? _thumbsRoot;
@@ -87,6 +100,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
   Timer? _liveTimer;
   String? _searchPatternError;
   String? _profileFilterId; // null = all
+  String? _activeTag;
+  bool _selecting = false;
+  Set<String> _selectedIds = {};
   int? _activeTabSessionId;
   var _libraryOverlayOpen = true;
   /// Suppress SetDesktopSize briefly after Library overlay collapse.
@@ -100,10 +116,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
     windowManager.addListener(this);
     windowManager.setPreventClose(true);
     _search.addListener(_onSearchChanged);
-    _liveTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _refreshLiveThumbs(),
-    );
+    _restartLiveTimer(widget.thumbRefresh);
     unawaited(_registerIpc());
     bindAboutMethodChannel(coreVersion: () => _coreVersion);
     _boot();
@@ -192,12 +205,33 @@ class _HubPageState extends State<HubPage> with WindowListener {
     });
   }
 
+  void _restartLiveTimer(LibraryThumbRefresh refresh) {
+    _liveTimer?.cancel();
+    _liveTimer = null;
+    final ms = refresh.thumbRefreshIntervalMs;
+    if (ms != null) {
+      _liveTimer = Timer.periodic(
+        Duration(milliseconds: ms),
+        (_) => _refreshLiveThumbs(),
+      );
+    }
+  }
+
+  @override
+  void didUpdateWidget(HubPage old) {
+    super.didUpdateWidget(old);
+    if (old.thumbRefresh != widget.thumbRefresh) {
+      _restartLiveTimer(widget.thumbRefresh);
+    }
+  }
+
   @override
   void dispose() {
     windowManager.removeListener(this);
     _liveTimer?.cancel();
     _overlayResizeSettleTimer?.cancel();
     _search.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -1120,6 +1154,11 @@ class _HubPageState extends State<HubPage> with WindowListener {
         await _editCard(card);
       case 'export':
         await _exportEntry(card);
+      case 'pin':
+      case 'unpin':
+        final updated = card.copyWith(favorite: action == 'pin');
+        _bridge?.registryUpsertJson(updated.toJson());
+        setState(_reloadCards);
       case 'delete':
         _bridge?.registryRemove(card.id);
         try {
@@ -1500,10 +1539,6 @@ class _HubPageState extends State<HubPage> with WindowListener {
     widget.onViewModeChanged(next);
   }
 
-  void _cycleGridSize() {
-    widget.onGridSizeChanged(widget.gridSize.next);
-  }
-
   Widget? _addConnectionBanner() {
     final pid = _profileFilterId;
     if (pid == null) return null;
@@ -1528,6 +1563,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
   Widget _buildBody(List<LibraryCard> filtered) {
     final banner = _addConnectionBanner();
     if (filtered.isEmpty) {
+      final hasSearch = _search.text.isNotEmpty || _activeTag != null;
       return Column(
         children: [
           if (banner != null) banner,
@@ -1542,12 +1578,45 @@ class _HubPageState extends State<HubPage> with WindowListener {
                     height: 96,
                   ),
                   const SizedBox(height: 16),
-                  Text(
-                    _cards.isEmpty
-                        ? 'No connections yet.\nType a host above and press Connect, or click +'
-                        : 'No matches',
-                    textAlign: TextAlign.center,
-                  ),
+                  if (_cards.isEmpty) ...[
+                    Text(
+                      'No connections yet',
+                      style: Theme.of(context).textTheme.titleMedium,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    FilledButton(
+                      key: const Key('library-empty-primary'),
+                      onPressed: () {
+                        _searchFocus.requestFocus();
+                      },
+                      child: const Text('Connect a host'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      key: const Key('library-empty-secondary'),
+                      onPressed: () => unawaited(_editProfile()),
+                      child: const Text('New profile…'),
+                    ),
+                  ] else ...[
+                    Text(
+                      'No matches',
+                      style: Theme.of(context).textTheme.titleMedium,
+                      textAlign: TextAlign.center,
+                    ),
+                    if (hasSearch) ...[
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _search.text = '';
+                            _activeTag = null;
+                          });
+                        },
+                        child: const Text('Clear filters'),
+                      ),
+                    ],
+                  ],
                 ],
               ),
             ),
@@ -1572,6 +1641,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
                   thumbsRoot: _thumbsRoot,
                   onTap: () => _connectCard(card),
                   onAction: _cardAction,
+                  selecting: _selecting,
+                  selected: _selectedIds.contains(card.id),
+                  onSelectedChanged: (v) => _toggleCardSelection(card.id, v),
                 );
               },
             ),
@@ -1579,6 +1651,10 @@ class _HubPageState extends State<HubPage> with WindowListener {
         ],
       );
     }
+    final extent = effectiveMaxCrossAxisExtent(
+      size: widget.gridSize,
+      extent: widget.gridExtent,
+    );
     return Column(
       children: [
         if (banner != null) banner,
@@ -1586,7 +1662,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
           child: GridView.builder(
             padding: const EdgeInsets.all(16),
             gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: widget.gridSize.maxCrossAxisExtent,
+              maxCrossAxisExtent: extent,
               mainAxisSpacing: 16,
               crossAxisSpacing: 16,
               childAspectRatio: 0.95,
@@ -1599,14 +1675,36 @@ class _HubPageState extends State<HubPage> with WindowListener {
                 liveBytes: _liveThumbs[card.id] ??
                     _liveThumbs[sessionKey(card.host, card.port)],
                 thumbsRoot: _thumbsRoot,
+                gridSize: widget.gridSize,
                 onTap: () => _connectCard(card),
                 onAction: _cardAction,
+                selecting: _selecting,
+                selected: _selectedIds.contains(card.id),
+                onSelectedChanged: (v) => _toggleCardSelection(card.id, v),
               );
             },
           ),
         ),
       ],
     );
+  }
+
+  void _toggleCardSelection(String id, bool selected) {
+    setState(() {
+      if (!_selecting) _selecting = true;
+      if (selected) {
+        _selectedIds.add(id);
+      } else {
+        _selectedIds.remove(id);
+      }
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selecting = false;
+      _selectedIds = {};
+    });
   }
 
   List<LibraryCard> _filteredCards() {
@@ -1624,11 +1722,159 @@ class _HubPageState extends State<HubPage> with WindowListener {
         list = list.where((c) => cardMatchesProfile(c, profile!)).toList();
       }
     }
-    return list;
+    final tag = _activeTag;
+    if (tag != null) {
+      list = filterLibraryCardsByTag(list, tag);
+    }
+    return sortLibraryCards(list, widget.sort, favoritesFirst: true);
   }
 
-  Widget _buildLibraryPane() {
-    final filtered = _filteredCards();
+  Widget _buildTagChipRow(List<LibraryCard> preTagFiltered) {
+    final tags = collectLibraryTags(preTagFiltered);
+    if (tags.isEmpty) return const SizedBox.shrink();
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(
+        children: [
+          for (final tag in tags)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: FilterChip(
+                label: Text(tag),
+                selected: _activeTag == tag,
+                onSelected: (_) => setState(() {
+                  _activeTag = _activeTag == tag ? null : tag;
+                }),
+              ),
+            ),
+          if (_activeTag != null)
+            TextButton(
+              onPressed: () => setState(() => _activeTag = null),
+              child: const Text('Clear'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectionBar(List<LibraryCard> filtered) {
+    final count = _selectedIds.length;
+    return Material(
+      color: Theme.of(context).colorScheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Row(
+          children: [
+            Text('$count selected'),
+            const Spacer(),
+            TextButton(
+              onPressed: () => setState(() {
+                _selectedIds =
+                    filtered.map((c) => c.id).toSet();
+              }),
+              child: const Text('Select all'),
+            ),
+            TextButton(
+              onPressed: count == 0 ? null : _bulkDelete,
+              child: const Text('Delete'),
+            ),
+            TextButton(
+              onPressed: count == 0 ? null : _bulkExport,
+              child: const Text('Export'),
+            ),
+            TextButton(
+              onPressed: _exitSelectionMode,
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _bulkDelete() async {
+    final b = _bridge;
+    if (b == null) return;
+    final ids = List<String>.from(_selectedIds);
+    if (ids.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${ids.length} connection${ids.length == 1 ? '' : 's'}?'),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    for (final id in ids) {
+      b.registryRemove(id);
+      try {
+        await _credentials.deletePassword(id);
+      } catch (_) {}
+    }
+    setState(() {
+      _exitSelectionMode();
+      _reloadCards();
+    });
+  }
+
+  Future<void> _bulkExport() async {
+    final ids = Set<String>.from(_selectedIds);
+    final selected = _cards.where((c) => ids.contains(c.id)).toList();
+    if (selected.isEmpty) return;
+    if (selected.length == 1) {
+      await _exportEntry(selected.first);
+      _exitSelectionMode();
+      return;
+    }
+    final entriesMap = {for (final c in selected) c.id: c.toJson()};
+    final json = jsonEncode({'entries': entriesMap});
+    final path = await FilePicker.platform.saveFile(
+      dialogTitle: 'Export selected connections',
+      fileName: 'helmhost-export.json',
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+    if (path == null) return;
+    await File(path).writeAsString(json);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Exported ${selected.length} connections')),
+      );
+    }
+    _exitSelectionMode();
+  }
+
+  Widget _buildLibraryPane(List<LibraryCard> filtered) {
+    // Pre-tag-filter cards for tag chip collection (profile-filtered but not yet tag-filtered).
+    final preTagFiltered = () {
+      var list = filterLibraryCardsRegex(_cards, _search.text);
+      final pid = _profileFilterId;
+      if (pid != null) {
+        ConnectionProfileCard? profile;
+        for (final p in _profiles) {
+          if (p.id == pid) {
+            profile = p;
+            break;
+          }
+        }
+        if (profile != null) {
+          list = list.where((c) => cardMatchesProfile(c, profile!)).toList();
+        }
+      }
+      return list;
+    }();
+
     return Row(
       children: [
         SizedBox(
@@ -1693,7 +1939,15 @@ class _HubPageState extends State<HubPage> with WindowListener {
           ),
         ),
         const VerticalDivider(width: 1),
-        Expanded(child: _buildBody(filtered)),
+        Expanded(
+          child: Column(
+            children: [
+              _buildTagChipRow(preTagFiltered),
+              if (_selecting) _buildSelectionBar(filtered),
+              Expanded(child: _buildBody(filtered)),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -1777,6 +2031,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final useTabs = widget.sessionShell == SessionShell.tabs;
+    final filtered = _filteredCards();
     final libraryPane = Column(
       children: [
         if (_error != null)
@@ -1789,7 +2044,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
                   TextButton(onPressed: _boot, child: const Text('Retry')),
             ),
           ),
-        Expanded(child: _buildLibraryPane()),
+        Expanded(child: _buildLibraryPane(filtered)),
       ],
     );
 
@@ -1809,9 +2064,17 @@ class _HubPageState extends State<HubPage> with WindowListener {
       themeMode: widget.themeMode,
       coreVersion: _coreVersion,
       statusMessage: _error != null ? 'Bridge error' : null,
+      sort: widget.sort,
+      onSortChanged: widget.onSortChanged,
+      thumbRefresh: widget.thumbRefresh,
+      onThumbRefreshChanged: widget.onThumbRefreshChanged,
+      gridExtent: widget.gridExtent,
+      onGridExtentChanged: widget.onGridExtentChanged,
+      connectionCount: filtered.length,
+      connectionTotal: _cards.length,
       onToggleShell: _toggleSessionShell,
       onToggleView: _toggleViewMode,
-      onCycleGridSize: _cycleGridSize,
+      onGridSizeChanged: widget.onGridSizeChanged,
       onCycleTheme: _cycleTheme,
       onImport: _importLibrary,
       onExport: _exportLibrary,
@@ -1887,6 +2150,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
                 ),
                 CompactToolbar(
                   controller: _search,
+                  focusNode: _searchFocus,
                   enabled: !_connecting,
                   errorText: _searchPatternError,
                   onConnect: _addressBarConnect,
@@ -1898,6 +2162,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
               children: [
                 CompactToolbar(
                   controller: _search,
+                  focusNode: _searchFocus,
                   enabled: !_connecting,
                   errorText: _searchPatternError,
                   onConnect: _addressBarConnect,
@@ -1907,10 +2172,68 @@ class _HubPageState extends State<HubPage> with WindowListener {
             ),
     );
 
-    if (!useTabs) return scaffold;
+    final libraryShortcuts = <ShortcutActivator, VoidCallback>{
+      const SingleActivator(LogicalKeyboardKey.digit1, meta: true): () {
+        widget.onGridSizeChanged(LibraryGridSize.small);
+        widget.onGridExtentChanged?.call(null);
+      },
+      const SingleActivator(LogicalKeyboardKey.digit1, control: true): () {
+        widget.onGridSizeChanged(LibraryGridSize.small);
+        widget.onGridExtentChanged?.call(null);
+      },
+      const SingleActivator(LogicalKeyboardKey.digit2, meta: true): () {
+        widget.onGridSizeChanged(LibraryGridSize.medium);
+        widget.onGridExtentChanged?.call(null);
+      },
+      const SingleActivator(LogicalKeyboardKey.digit2, control: true): () {
+        widget.onGridSizeChanged(LibraryGridSize.medium);
+        widget.onGridExtentChanged?.call(null);
+      },
+      const SingleActivator(LogicalKeyboardKey.digit3, meta: true): () {
+        widget.onGridSizeChanged(LibraryGridSize.large);
+        widget.onGridExtentChanged?.call(null);
+      },
+      const SingleActivator(LogicalKeyboardKey.digit3, control: true): () {
+        widget.onGridSizeChanged(LibraryGridSize.large);
+        widget.onGridExtentChanged?.call(null);
+      },
+      const SingleActivator(LogicalKeyboardKey.keyL, meta: true): _toggleViewMode,
+      const SingleActivator(LogicalKeyboardKey.keyL, control: true): _toggleViewMode,
+      const SingleActivator(LogicalKeyboardKey.keyS, meta: true, shift: true): () {
+        final cb = widget.onSortChanged;
+        if (cb != null) cb(widget.sort.next);
+      },
+      const SingleActivator(LogicalKeyboardKey.keyS, control: true, shift: true): () {
+        final cb = widget.onSortChanged;
+        if (cb != null) cb(widget.sort.next);
+      },
+      const SingleActivator(LogicalKeyboardKey.keyT, meta: true, shift: true): () {
+        final cb = widget.onThumbRefreshChanged;
+        if (cb != null) cb(widget.thumbRefresh.next);
+      },
+      const SingleActivator(LogicalKeyboardKey.keyT, control: true, shift: true): () {
+        final cb = widget.onThumbRefreshChanged;
+        if (cb != null) cb(widget.thumbRefresh.next);
+      },
+      const SingleActivator(LogicalKeyboardKey.escape): () {
+        if (_selecting) {
+          _exitSelectionMode();
+        } else if (_libraryOverlayOpen && tabSessions.isNotEmpty) {
+          _setLibraryOverlayOpen(false);
+        }
+      },
+    };
+
+    if (!useTabs) {
+      return CallbackShortcuts(
+        bindings: libraryShortcuts,
+        child: Focus(autofocus: true, child: scaffold),
+      );
+    }
 
     return CallbackShortcuts(
       bindings: {
+        ...libraryShortcuts,
         const SingleActivator(LogicalKeyboardKey.keyL, meta: true, shift: true):
             () {
           if (tabSessions.isEmpty) {
@@ -1925,11 +2248,6 @@ class _HubPageState extends State<HubPage> with WindowListener {
             _setLibraryOverlayOpen(true);
           } else {
             _setLibraryOverlayOpen(!_libraryOverlayOpen);
-          }
-        },
-        const SingleActivator(LogicalKeyboardKey.escape): () {
-          if (_libraryOverlayOpen && tabSessions.isNotEmpty) {
-            _setLibraryOverlayOpen(false);
           }
         },
         const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () {

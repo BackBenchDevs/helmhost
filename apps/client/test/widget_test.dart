@@ -18,8 +18,8 @@ void main() {
     await tester.pump();
     expect(find.text('Connect'), findsOneWidget);
     expect(find.textContaining('No connections yet'), findsOneWidget);
-    // Windows shell: + lives in the profile sidebar, not a tooltip AppBar action.
-    expect(find.text('New profile…'), findsOneWidget);
+    // 'New profile…' appears in sidebar + empty-state CTA.
+    expect(find.text('New profile…'), findsWidgets);
     expect(find.byType(FloatingActionButton), findsNothing);
   });
 

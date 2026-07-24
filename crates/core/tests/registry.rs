@@ -60,6 +60,7 @@ fn display_name_round_trip() {
         quality_level: None,
         compress_level: None,
         profile_none: false,
+        favorite: false,
     });
     assert_eq!(
         reg.get("lab").and_then(|e| e.display_name.as_deref()),
@@ -124,6 +125,7 @@ fn extended_fields_json_round_trip() {
         quality_level: None,
         compress_level: None,
         profile_none: false,
+        favorite: false,
     });
     let loaded = ConnectionRegistry::from_json(&reg.to_json().unwrap()).unwrap();
     let e = loaded.get("srv").unwrap();
@@ -262,4 +264,27 @@ fn merge_keeps_profiles() {
     a.merge_from(b);
     assert_eq!(a.profile_count(), 2);
     assert_eq!(a.get("h").and_then(|e| e.profile_id.as_deref()), Some("p2"));
+}
+
+#[test]
+fn favorite_defaults_to_false() {
+    let e = ConnectionEntry::new("a", "host", 5900);
+    assert!(!e.favorite);
+}
+
+#[test]
+fn favorite_json_roundtrip() {
+    let mut reg = ConnectionRegistry::new();
+    let mut e = ConnectionEntry::new("fav", "10.0.0.1", 5900);
+    e.favorite = true;
+    reg.upsert(e);
+    let loaded = ConnectionRegistry::from_json(&reg.to_json().unwrap()).unwrap();
+    assert!(loaded.get("fav").unwrap().favorite);
+}
+
+#[test]
+fn favorite_false_is_default_on_missing_field() {
+    let json = r#"{"entries":{"a":{"id":"a","host":"h","port":5900}}}"#;
+    let reg = ConnectionRegistry::from_json(json).unwrap();
+    assert!(!reg.get("a").unwrap().favorite);
 }

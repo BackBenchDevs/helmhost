@@ -6,12 +6,14 @@ class CompactToolbar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onConnect,
+    this.focusNode,
     this.enabled = true,
     this.errorText,
     this.hintText = 'VNC address or search…',
   });
 
   final TextEditingController controller;
+  final FocusNode? focusNode;
   final VoidCallback onConnect;
   final bool enabled;
   final String? errorText;
@@ -31,6 +33,7 @@ class CompactToolbar extends StatelessWidget {
             Expanded(
               child: TextField(
                 controller: controller,
+                focusNode: focusNode,
                 enabled: enabled,
                 decoration: InputDecoration(
                   isDense: true,

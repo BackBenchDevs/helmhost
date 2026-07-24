@@ -141,6 +141,45 @@ void main() {
     expect(result!.entry['display_name'], displayNameFromHost('h'));
   });
 
+  testWidgets('Properties OK with Favorite checked sets favorite true',
+      (tester) async {
+    ConnectionEditorResult? result;
+    const card = LibraryCard(id: 'box:5900', host: 'box', port: 5900);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await showPropertiesDialog(
+                  context,
+                  existing: card,
+                  credentials: MemoryCredentialStore(),
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    // Scroll within the General tab ListView to ensure Favorite is visible.
+    await tester.dragUntilVisible(
+      find.widgetWithText(CheckboxListTile, 'Favorite'),
+      find.byType(ListView).first,
+      const Offset(0, -50),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Favorite'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(result, isNotNull);
+    expect(result!.entry['favorite'], isTrue);
+  });
+
   test('applyProfileDefaultsToDraft maps encryption and certs', () {
     const profile = ConnectionProfileCard(
       id: 'p1',

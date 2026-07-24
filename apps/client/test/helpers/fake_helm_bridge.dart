@@ -23,6 +23,7 @@ class FakeHelmBridge implements IHelmBridge {
   final List<Map<String, dynamic>> upserts = [];
   final List<int> closed = [];
   final List<int> grabbed = [];
+  int fbCopyCalls = 0;
   final List<(int, int, int, int)> pointers = [];
   final List<(int, bool, int)> keys = [];
   final Map<int, List<Map<String, dynamic>>> _pollQueues = {};
@@ -108,6 +109,7 @@ class FakeHelmBridge implements IHelmBridge {
 
   @override
   Uint8List fbCopy(int sessionId, int w, int h) {
+    fbCopyCalls++;
     final need = w * h * 4;
     if (rgba.length < need) return Uint8List(need);
     return Uint8List.sublistView(rgba, 0, need);

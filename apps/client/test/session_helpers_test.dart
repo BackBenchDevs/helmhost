@@ -487,4 +487,203 @@ void main() {
       expect(parseDefaultDisplayField('x'), isNull);
     });
   });
+
+  group('LibraryCard.favorite', () {
+    test('default is false', () {
+      const c = LibraryCard(id: 'h:5900', host: 'h', port: 5900);
+      expect(c.favorite, isFalse);
+    });
+
+    test('fromJson/toJson round-trip', () {
+      final json = const LibraryCard(
+        id: 'h:5900',
+        host: 'h',
+        port: 5900,
+        favorite: true,
+      ).toJson();
+      expect(json['favorite'], isTrue);
+      final c2 = LibraryCard.fromJson(json);
+      expect(c2.favorite, isTrue);
+    });
+
+    test('fromJson defaults to false when key absent', () {
+      final c = LibraryCard.fromJson({'id': 'a', 'host': 'h', 'port': 5900});
+      expect(c.favorite, isFalse);
+    });
+
+    test('copyWith updates favorite', () {
+      const c = LibraryCard(id: 'h:5900', host: 'h', port: 5900);
+      final c2 = c.copyWith(favorite: true);
+      expect(c2.favorite, isTrue);
+      expect(c2.id, c.id);
+    });
+  });
+
+  group('LibrarySort', () {
+    test('labels', () {
+      expect(LibrarySort.name.label, 'Name');
+      expect(LibrarySort.host.label, 'Host');
+      expect(LibrarySort.lastConnected.label, 'Last connected');
+      expect(LibrarySort.openFirst.label, 'Open first');
+    });
+
+    test('prefsKeys', () {
+      expect(LibrarySort.name.prefsKey, 'name');
+      expect(LibrarySort.host.prefsKey, 'host');
+      expect(LibrarySort.lastConnected.prefsKey, 'last_connected');
+      expect(LibrarySort.openFirst.prefsKey, 'open_first');
+    });
+
+    test('next cycles', () {
+      expect(LibrarySort.name.next, LibrarySort.host);
+      expect(LibrarySort.host.next, LibrarySort.lastConnected);
+      expect(LibrarySort.lastConnected.next, LibrarySort.openFirst);
+      expect(LibrarySort.openFirst.next, LibrarySort.name);
+    });
+
+    test('fromPrefs defaults to name', () {
+      expect(LibrarySortX.fromPrefs(null), LibrarySort.name);
+      expect(LibrarySortX.fromPrefs('unknown'), LibrarySort.name);
+      expect(LibrarySortX.fromPrefs('host'), LibrarySort.host);
+    });
+  });
+
+  group('sortLibraryCards', () {
+    final cards = [
+      const LibraryCard(
+        id: 'b:5900',
+        host: 'b',
+        port: 5900,
+        lastConnectedAt: 100,
+      ),
+      const LibraryCard(
+        id: 'a:5900',
+        host: 'a',
+        port: 5900,
+        lastConnectedAt: 200,
+        favorite: true,
+      ),
+      const LibraryCard(id: 'c:5900', host: 'c', port: 5900),
+    ];
+
+    test('sort by name', () {
+      final sorted = sortLibraryCards(cards, LibrarySort.name,
+          favoritesFirst: false);
+      expect(sorted.map((c) => c.host), ['a', 'b', 'c']);
+    });
+
+    test('favorites first overrides sort order', () {
+      final sorted =
+          sortLibraryCards(cards, LibrarySort.name, favoritesFirst: true);
+      expect(sorted.first.id, 'a:5900');
+    });
+
+    test('sort by lastConnected descending', () {
+      final sorted = sortLibraryCards(cards, LibrarySort.lastConnected,
+          favoritesFirst: false);
+      expect(sorted.first.lastConnectedAt, 200);
+      expect(sorted.last.lastConnectedAt, isNull);
+    });
+  });
+
+  group('collectLibraryTags / filterLibraryCardsByTag', () {
+    final cards = [
+      const LibraryCard(
+          id: 'a', host: 'h', port: 5900, tags: ['prod', 'gpu']),
+      const LibraryCard(id: 'b', host: 'h', port: 5901, tags: ['dev', 'prod']),
+      const LibraryCard(id: 'c', host: 'h', port: 5902, tags: []),
+    ];
+
+    test('collectLibraryTags returns sorted unique tags', () {
+      expect(collectLibraryTags(cards), ['dev', 'gpu', 'prod']);
+    });
+
+    test('filterLibraryCardsByTag filters correctly', () {
+      final filtered = filterLibraryCardsByTag(cards, 'prod');
+      expect(filtered.map((c) => c.id).toSet(), {'a', 'b'});
+    });
+
+    test('filterLibraryCardsByTag with unknown tag returns empty', () {
+      expect(filterLibraryCardsByTag(cards, 'unknown'), isEmpty);
+    });
+
+    test('filterLibraryCardsByTag with tag containing parens matches exactly', () {
+      final specialCards = [
+        const LibraryCard(id: 'x', host: 'h', port: 5900, tags: ['(prod)']),
+        const LibraryCard(id: 'y', host: 'h', port: 5901, tags: ['prod']),
+        const LibraryCard(id: 'z', host: 'h', port: 5902, tags: ['not-prod']),
+      ];
+      final filtered = filterLibraryCardsByTag(specialCards, '(prod)');
+      expect(filtered.map((c) => c.id).toList(), ['x']);
+    });
+
+    test('filterLibraryCardsByTag with tag containing + matches exactly', () {
+      final specialCards = [
+        const LibraryCard(id: 'x', host: 'h', port: 5900, tags: ['a+b']),
+        const LibraryCard(id: 'y', host: 'h', port: 5901, tags: ['a']),
+        const LibraryCard(id: 'z', host: 'h', port: 5902, tags: ['b']),
+      ];
+      final filtered = filterLibraryCardsByTag(specialCards, 'a+b');
+      expect(filtered.map((c) => c.id).toList(), ['x']);
+    });
+  });
+
+  group('LibraryThumbRefresh', () {
+    test('labels', () {
+      expect(LibraryThumbRefresh.off.label, 'Off');
+      expect(LibraryThumbRefresh.slow.label, 'Slow (5 s)');
+      expect(LibraryThumbRefresh.normal.label, 'Normal (1 s)');
+    });
+
+    test('prefsKeys', () {
+      expect(LibraryThumbRefresh.off.prefsKey, 'off');
+      expect(LibraryThumbRefresh.slow.prefsKey, 'slow');
+      expect(LibraryThumbRefresh.normal.prefsKey, 'normal');
+    });
+
+    test('thumbRefreshIntervalMs', () {
+      expect(LibraryThumbRefresh.off.thumbRefreshIntervalMs, isNull);
+      expect(LibraryThumbRefresh.slow.thumbRefreshIntervalMs, 5000);
+      expect(LibraryThumbRefresh.normal.thumbRefreshIntervalMs, 1000);
+    });
+
+    test('next cycles off→slow→normal→off', () {
+      expect(LibraryThumbRefresh.off.next, LibraryThumbRefresh.slow);
+      expect(LibraryThumbRefresh.slow.next, LibraryThumbRefresh.normal);
+      expect(LibraryThumbRefresh.normal.next, LibraryThumbRefresh.off);
+    });
+
+    test('fromPrefs defaults to normal', () {
+      expect(LibraryThumbRefreshX.fromPrefs(null), LibraryThumbRefresh.normal);
+      expect(LibraryThumbRefreshX.fromPrefs('off'), LibraryThumbRefresh.off);
+      expect(LibraryThumbRefreshX.fromPrefs('slow'), LibraryThumbRefresh.slow);
+    });
+  });
+
+  group('clampLibraryGridExtent / effectiveMaxCrossAxisExtent', () {
+    test('clamp null returns null', () {
+      expect(clampLibraryGridExtent(null), isNull);
+    });
+
+    test('clamp clamps to [160, 400]', () {
+      expect(clampLibraryGridExtent(100), 160.0);
+      expect(clampLibraryGridExtent(300), 300.0);
+      expect(clampLibraryGridExtent(500), 400.0);
+    });
+
+    test('effectiveMaxCrossAxisExtent uses extent when set', () {
+      expect(
+        effectiveMaxCrossAxisExtent(
+            size: LibraryGridSize.medium, extent: 220),
+        220.0,
+      );
+    });
+
+    test('effectiveMaxCrossAxisExtent falls back to size default', () {
+      expect(
+        effectiveMaxCrossAxisExtent(size: LibraryGridSize.medium),
+        LibraryGridSize.medium.maxCrossAxisExtent,
+      );
+    });
+  });
 }

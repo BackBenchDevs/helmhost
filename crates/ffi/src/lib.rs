@@ -618,6 +618,7 @@ pub extern "C" fn hh_registry_upsert(
             entry.notes = prev.as_ref().and_then(|p| p.notes.clone());
             entry.profile_id = prev.as_ref().and_then(|p| p.profile_id.clone());
             entry.profile_none = prev.as_ref().map(|p| p.profile_none).unwrap_or(false);
+            entry.favorite = prev.as_ref().map(|p| p.favorite).unwrap_or(false);
             s.registry.upsert(entry);
             if let Some(path) = s.registry_path.clone() {
                 let _ = s.registry.save_to_path(&path);

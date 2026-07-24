@@ -120,6 +120,8 @@ pub struct ConnectionEntry {
     /// Optional Tight zlib compress 0–9.
     #[serde(default)]
     pub compress_level: Option<i32>,
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 fn default_bandwidth_preset() -> String {
@@ -147,6 +149,7 @@ impl ConnectionEntry {
             bandwidth_preset: default_bandwidth_preset(),
             quality_level: None,
             compress_level: None,
+            favorite: false,
         }
     }
 }

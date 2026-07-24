@@ -115,6 +115,9 @@ class _HubAppState extends State<HubApp> {
   late LibraryViewMode _viewMode;
   late LibraryGridSize _gridSize;
   late SessionShell _sessionShell;
+  late LibrarySort _sort;
+  late LibraryThumbRefresh _thumbRefresh;
+  double? _gridExtent;
 
   @override
   void initState() {
@@ -123,6 +126,9 @@ class _HubAppState extends State<HubApp> {
     _viewMode = widget.prefs.libraryViewMode;
     _gridSize = widget.prefs.libraryGridSize;
     _sessionShell = widget.prefs.sessionShell;
+    _sort = widget.prefs.librarySort;
+    _thumbRefresh = widget.prefs.libraryThumbRefresh;
+    _gridExtent = widget.prefs.libraryGridExtent;
   }
 
   Future<void> _setTheme(ThemeMode mode) async {
@@ -145,6 +151,25 @@ class _HubAppState extends State<HubApp> {
     await widget.prefs.setSessionShell(shell);
   }
 
+  Future<void> _setSort(LibrarySort sort) async {
+    setState(() => _sort = sort);
+    await widget.prefs.setLibrarySort(sort);
+  }
+
+  Future<void> _setThumbRefresh(LibraryThumbRefresh refresh) async {
+    setState(() => _thumbRefresh = refresh);
+    await widget.prefs.setLibraryThumbRefresh(refresh);
+  }
+
+  Future<void> _setGridExtent(double? extent) async {
+    setState(() => _gridExtent = extent);
+    if (extent == null) {
+      await widget.prefs.clearLibraryGridExtent();
+    } else {
+      await widget.prefs.setLibraryGridExtent(extent);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -162,6 +187,12 @@ class _HubAppState extends State<HubApp> {
         onGridSizeChanged: _setGridSize,
         sessionShell: _sessionShell,
         onSessionShellChanged: _setSessionShell,
+        sort: _sort,
+        onSortChanged: _setSort,
+        thumbRefresh: _thumbRefresh,
+        onThumbRefreshChanged: _setThumbRefresh,
+        gridExtent: _gridExtent,
+        onGridExtentChanged: _setGridExtent,
         prefs: widget.prefs,
       ),
     );

@@ -9,6 +9,9 @@ const _kLibraryGridSize = 'helmhost.libraryGridSize';
 const _kViewScaleMode = 'helmhost.viewScaleMode';
 const _kSessionShell = 'helmhost.sessionShell';
 const _kAutoReconnectOnDrop = 'helmhost.autoReconnectOnDrop';
+const _kLibrarySort = 'helmhost.librarySort';
+const _kLibraryThumbRefresh = 'helmhost.libraryThumbRefresh';
+const _kLibraryGridExtent = 'helmhost.libraryGridExtent';
 
 class AppPrefs {
   AppPrefs._(this._p);
@@ -93,6 +96,30 @@ class AppPrefs {
 
   Future<void> setAutoReconnectOnDrop(bool enabled) async {
     await _p.setBool(_kAutoReconnectOnDrop, enabled);
+  }
+
+  LibrarySort get librarySort =>
+      LibrarySortX.fromPrefs(_p.getString(_kLibrarySort));
+
+  Future<void> setLibrarySort(LibrarySort sort) async {
+    await _p.setString(_kLibrarySort, sort.prefsKey);
+  }
+
+  LibraryThumbRefresh get libraryThumbRefresh =>
+      LibraryThumbRefreshX.fromPrefs(_p.getString(_kLibraryThumbRefresh));
+
+  Future<void> setLibraryThumbRefresh(LibraryThumbRefresh refresh) async {
+    await _p.setString(_kLibraryThumbRefresh, refresh.prefsKey);
+  }
+
+  double? get libraryGridExtent => _p.getDouble(_kLibraryGridExtent);
+
+  Future<void> setLibraryGridExtent(double extent) async {
+    await _p.setDouble(_kLibraryGridExtent, extent);
+  }
+
+  Future<void> clearLibraryGridExtent() async {
+    await _p.remove(_kLibraryGridExtent);
   }
 }
 

@@ -52,5 +52,41 @@ void main() {
       await prefs.setSessionShell(SessionShell.tabs);
       expect(prefs.sessionShell, SessionShell.tabs);
     });
+
+    test('librarySort defaults to name', () async {
+      final prefs = await AppPrefs.open();
+      expect(prefs.librarySort, LibrarySort.name);
+      await prefs.setLibrarySort(LibrarySort.host);
+      expect(prefs.librarySort, LibrarySort.host);
+      await prefs.setLibrarySort(LibrarySort.lastConnected);
+      expect(prefs.librarySort, LibrarySort.lastConnected);
+      await prefs.setLibrarySort(LibrarySort.openFirst);
+      expect(prefs.librarySort, LibrarySort.openFirst);
+    });
+
+    test('libraryThumbRefresh defaults to normal', () async {
+      final prefs = await AppPrefs.open();
+      expect(prefs.libraryThumbRefresh, LibraryThumbRefresh.normal);
+      await prefs.setLibraryThumbRefresh(LibraryThumbRefresh.off);
+      expect(prefs.libraryThumbRefresh, LibraryThumbRefresh.off);
+      await prefs.setLibraryThumbRefresh(LibraryThumbRefresh.slow);
+      expect(prefs.libraryThumbRefresh, LibraryThumbRefresh.slow);
+    });
+
+    test('libraryGridExtent get/set/clear', () async {
+      final prefs = await AppPrefs.open();
+      expect(prefs.libraryGridExtent, isNull);
+      await prefs.setLibraryGridExtent(280.0);
+      expect(prefs.libraryGridExtent, 280.0);
+      await prefs.clearLibraryGridExtent();
+      expect(prefs.libraryGridExtent, isNull);
+    });
+
+    test('setLibraryGridExtent stores raw value without clamping', () async {
+      // Prefs stores the raw double; clamping is in clampLibraryGridExtent.
+      final prefs = await AppPrefs.open();
+      await prefs.setLibraryGridExtent(500.0);
+      expect(prefs.libraryGridExtent, 500.0);
+    });
   });
 }
