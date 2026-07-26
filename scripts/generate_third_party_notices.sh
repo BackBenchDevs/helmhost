@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Refresh the generated inventory section of THIRD_PARTY_NOTICES.md.
-# Curated license texts in that file remain authoritative; this script
-# appends/updates a machine inventory when cargo/flutter tools are available.
+# Maintainer tool: refresh THIRD_PARTY_NOTICES.generated.md (inventory only).
+# Do NOT paste this script into the in-app THIRD_PARTY_NOTICES.md asset —
+# that file is the end-user legal page and must stay curated attributions.
+# Curated license texts in THIRD_PARTY_NOTICES.md remain authoritative.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

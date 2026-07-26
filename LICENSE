@@ -65,10 +65,12 @@ grant ownership or redistribution rights.
    OPEN_COMPONENTS.md. Open Components are licensed only as stated there;
    everything else remains under this License.
 
-7. Trademarks
+7. Trademarks and names
    This License does not grant rights to use "Helmhost", "BackBenchDevs",
-   or related marks except as needed to describe unmodified Software
-   obtained from Licensor.
+   or related names or marks (whether or not registered) except as needed
+   to describe unmodified Software obtained from Licensor. Licensor does
+   not, by this License alone, assert that those names are registered
+   trademarks in any jurisdiction.
 
 8. Third-party software
    The Software may include third-party open-source components under their

@@ -124,7 +124,7 @@ class AppPrefs {
 }
 
 ThemeData helmTheme(Brightness brightness) {
-  const seed = Color(0xFF1B4D3E);
+  const seed = Color(0xFF11192D);
   final scheme = ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
   return ThemeData(
     colorScheme: scheme,

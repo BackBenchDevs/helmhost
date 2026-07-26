@@ -18,7 +18,7 @@ void main() {
     expect(t, contains(kAppCodename));
   });
 
-  testWidgets('About dialog shows Firefox-style layout; no debug',
+  testWidgets('About dialog shows brand layout; no debug',
       (tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -105,5 +105,25 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Third-party notices'), findsOneWidget);
+    expect(
+      find.textContaining('Helmhost is not open source'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('claim those rights'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('webpki-roots'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('MPL-2.0'),
+      findsWidgets,
+    );
+    expect(
+      find.textContaining('generate_third_party_notices'),
+      findsNothing,
+    );
   });
 }

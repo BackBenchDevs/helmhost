@@ -45,6 +45,15 @@ Future<void> main(List<String> args) async {
             await windowManager.close();
           }
           return null;
+        case kMethodForceDisconnect:
+          final force = SessionWindowCommands.forceDisconnect;
+          if (force != null) {
+            await force();
+          } else {
+            await windowManager.setPreventClose(false);
+            await windowManager.close();
+          }
+          return null;
         default:
           throw MissingPluginException(call.method);
       }

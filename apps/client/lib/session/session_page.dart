@@ -165,6 +165,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     bindAboutMethodChannel(coreVersion: () => _coreVersion);
     if (widget.closeOnExit) {
       SessionWindowCommands.dismissKeepSession = _dismissKeepSession;
+      SessionWindowCommands.forceDisconnect = _forceDisconnect;
     }
     if (widget.active) {
       _startActiveSession();
@@ -416,6 +417,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       }
     }
 
+    // Flag before native close so in-flight poll cannot open Reconnect.
     _windowClosing = true;
     widget.logger.info('session window closing — disconnecting', {
       'sessionId': _sessionId,
@@ -427,6 +429,28 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     // NSApp.terminate and kills Hub + every session window.
     await windowManager.setPreventClose(false);
     await windowManager.close();
+  }
+
+  /// Hub already confirmed disconnect — no second confirm / reconnect UI.
+  Future<void> _forceDisconnect() async {
+    if (_windowClosing || _sessionTornDown) {
+      try {
+        await windowManager.setPreventClose(false);
+        await windowManager.close();
+      } catch (_) {}
+      return;
+    }
+    _windowClosing = true;
+    widget.logger.info('session force disconnect from hub', {
+      'sessionId': _sessionId,
+      'host': widget.host,
+      'port': widget.port,
+    });
+    await _teardownSession(reason: 'user_disconnect');
+    try {
+      await windowManager.setPreventClose(false);
+      await windowManager.close();
+    } catch (_) {}
   }
 
   /// Hub is reparenting this session into a tab — close UI only.
@@ -516,6 +540,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   void dispose() {
     if (widget.closeOnExit) {
       SessionWindowCommands.dismissKeepSession = null;
+      SessionWindowCommands.forceDisconnect = null;
     }
     windowManager.removeListener(this);
     if (_embedded) {
@@ -828,6 +853,12 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   Future<void> _handleDisconnect(String msg) async {
     if (_connState == SessionConnState.reconnecting) return;
     if (_connState == SessionConnState.disconnected) return;
+    if (!mounted) return;
+    if (!shouldOfferReconnectAfterDisconnect(
+      userInitiatedClose: _sessionTornDown || _windowClosing,
+    )) {
+      return;
+    }
 
     final unknown = isUnknownSessionMessage(msg);
     // Embedded + unknown session: keep hub tab so user can reconnect.
@@ -835,6 +866,11 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       await _notifyHubEnded(reason: msg);
     }
     if (!mounted) return;
+    if (!shouldOfferReconnectAfterDisconnect(
+      userInitiatedClose: _sessionTornDown || _windowClosing,
+    )) {
+      return;
+    }
     setState(() {
       _connState = SessionConnState.disconnected;
       _lastError = unknown ? 'Session ended' : msg;

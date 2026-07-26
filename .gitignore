@@ -76,3 +76,6 @@ apps/client/assets/legal/THIRD_PARTY_NOTICES.generated.md
 # Local Flutter SDK + build artifacts
 tools/
 
+
+# Revmark local backlog DB
+.rmk/data/

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -1204,21 +1205,46 @@ class _HubPageState extends State<HubPage> with WindowListener {
     try {
       await saveSessionThumb(_bridge!, key, s.id);
     } catch (_) {}
-    try {
-      _bridge?.close(s.id);
-    } catch (_) {}
+
     if (s.shell == SessionShell.windows) {
+      // Session window owns RFB close — avoid poll race → Reconnect dialog.
       for (final c in await WindowController.getAll()) {
         if (c.arguments.isEmpty) continue;
         try {
           final a = jsonDecode(c.arguments) as Map<String, dynamic>;
           if (a['role'] == 'session' &&
               (a['sessionId'] as num).toInt() == s.id) {
-            await c.closeWindow();
+            try {
+              await c.invokeMethod(kMethodForceDisconnect);
+            } catch (e) {
+              widget.logger.warn('forceDisconnect invoke failed', {
+                'sessionId': s.id,
+                'error': '$e',
+              });
+              try {
+                _bridge?.close(s.id);
+              } catch (_) {}
+              await c.closeWindow();
+            }
           }
         } catch (_) {}
       }
+      if (!mounted) return;
+      setState(() {
+        _sessions.removeBySessionId(s.id);
+        if (_activeTabSessionId == s.id) {
+          _activeTabSessionId = _sessions.tabSessions.isEmpty
+              ? null
+              : _sessions.tabSessions.last.id;
+          _libraryOverlayOpen = _activeTabSessionId == null;
+        }
+        _liveThumbs.remove(key);
+        _reloadCards();
+      });
+      return;
     }
+
+    // Tabs: unmount SessionPage (stop poll) before killing native session.
     setState(() {
       _sessions.removeBySessionId(s.id);
       if (_activeTabSessionId == s.id) {
@@ -1230,6 +1256,10 @@ class _HubPageState extends State<HubPage> with WindowListener {
       _liveThumbs.remove(key);
       _reloadCards();
     });
+    await SchedulerBinding.instance.endOfFrame;
+    try {
+      _bridge?.close(s.id);
+    } catch (_) {}
   }
 
   Future<void> _editProfile([ConnectionProfileCard? existing]) async {

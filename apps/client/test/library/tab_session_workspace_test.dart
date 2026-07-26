@@ -64,6 +64,22 @@ void main() {
     });
   });
 
+  group('shouldOfferReconnectAfterDisconnect', () {
+    test('unexpected drop offers reconnect', () {
+      expect(
+        shouldOfferReconnectAfterDisconnect(userInitiatedClose: false),
+        isTrue,
+      );
+    });
+
+    test('intentional close never offers reconnect', () {
+      expect(
+        shouldOfferReconnectAfterDisconnect(userInitiatedClose: true),
+        isFalse,
+      );
+    });
+  });
+
   group('sessionStatusChipLabel', () {
     test('buffering and reconnecting chips', () {
       final stats = SessionLinkStats();

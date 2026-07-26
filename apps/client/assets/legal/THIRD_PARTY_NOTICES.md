@@ -1,24 +1,26 @@
 # Third-party notices — Helmhost
 
-Helmhost (product, architecture, and core engines) is proprietary software of
-**BackBenchDevs**, licensed under the BackBenchDevs Proprietary Software
-License (see Licenses → Product license in the app, or `LICENSE` in the
-source tree).
+**Helmhost is not open source.** The product, architecture, and core engines
+are proprietary software of **BackBenchDevs**, licensed only under the
+BackBenchDevs Proprietary Software License (Licenses → Helmhost in the app,
+or `LICENSE` / `assets/legal/LICENSE.txt` in the source tree).
 
-The following free and open-source components may be included in this
-product. They remain under their own licenses. Your copy may not include
-every component listed here, depending on platform and build.
+This page lists **third-party** open-source components that may be linked or
+shipped with Helmhost. They remain under their own licenses. Your build may
+not include every component below (platform and features differ).
 
-This file is a compliance notice (similar in purpose to browser “about:license”
-pages). It does **not** open-source Helmhost itself.
+**Rights:** Copyrights, trademarks, and other rights in third-party
+components and marks named here belong to their respective owners and
+licensors. Helmhost and BackBenchDevs do **not** claim those rights. Names
+are used only for identification and license compliance.
 
 ---
 
 ## Summary of major components
 
-| Component | Typical license | Role |
-|-----------|-----------------|------|
-| Flutter / Dart SDK | BSD-3-Clause | UI toolkit |
+| Component | Typical license (SPDX) | Role |
+|-----------|------------------------|------|
+| Flutter / Dart SDK * | BSD-3-Clause | UI toolkit |
 | cupertino_icons | MIT | Icons |
 | ffi | BSD-3-Clause | Dart FFI |
 | path_provider | BSD-3-Clause | Paths |
@@ -34,29 +36,34 @@ pages). It does **not** open-source Helmhost itself.
 | serde / serde_json | MIT OR Apache-2.0 | Serialization |
 | rustls / tokio-rustls | Apache-2.0 / MIT / ISC | TLS |
 | ring | ISC-style | Crypto |
-| webpki-roots | MPL-2.0 | TLS roots |
+| webpki-roots | MPL-2.0 | TLS trust roots (crate) |
 | flate2 | MIT OR Apache-2.0 | Compression |
 | des / cipher | MIT OR Apache-2.0 | VNC DES auth |
 | image (Rust) | MIT OR Apache-2.0 | JPEG decode |
 | tracing / tracing-subscriber | MIT | Logging |
 | once_cell | MIT OR Apache-2.0 | Lazy init |
-| Sparkle | MIT | macOS updates |
-| WinSparkle | MIT | Windows updates |
+| Sparkle * | MIT | macOS updates |
+| WinSparkle * | MIT | Windows updates |
+
+\* Third-party name / mark — rights remain with the respective owners;
+BackBenchDevs does not claim them. Listed for attribution and compliance.
 
 ---
 
-## Mozilla Public License 2.0
+## Dependency licenses (excerpt)
 
-Applies to (among others): **webpki-roots**.
+### MPL-2.0 — webpki-roots
 
-You may obtain a copy of the MPL at https://mozilla.org/MPL/2.0/
+The Rust crate **webpki-roots** (TLS certificate trust anchors) is licensed
+under SPDX **MPL-2.0** (Mozilla Public License 2.0 * — name of that license;
+rights in the license and any related marks remain with their owners;
+BackBenchDevs does not claim them).
 
-Source Code Form for covered files is available from the upstream crates
-and from the Helmhost dependency tree (`Cargo.lock`).
+- Full text: https://www.mozilla.org/MPL/2.0/
+- Covered source: upstream `webpki-roots` and the Helmhost dependency tree
+  (`Cargo.lock`)
 
----
-
-## MIT License (representative text)
+### MIT License (representative text)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -77,29 +84,29 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 Applies in whole or in part to many Dart and Rust dependencies listed above,
-and to **Sparkle** / **WinSparkle**.
+and to **Sparkle** * / **WinSparkle** * (rights remain with their respective
+copyright holders; BackBenchDevs does not claim them).
 
-### Sparkle
+#### Sparkle * — required copyright attribution
 
-Copyright (c) 2006-2013 Andy Matuschak.
-Copyright (c) 2009-2013 Elgato Systems GmbH.
-Copyright (c) 2011-2014 Kornel Lesiński.
-Copyright (c) 2015-2017 Mayur Pawashe.
-Copyright (c) 2014 C.W. Betts.
-Copyright (c) 2014 Petroules Corporation.
-Copyright (c) 2014 Big Nerd Ranch.
+Copyright © 2006-2013 Andy Matuschak.
+Copyright © 2009-2013 Elgato Systems GmbH.
+Copyright © 2011-2014 Kornel Lesiński.
+Copyright © 2015-2017 Mayur Pawashe.
+Copyright © 2014 C.W. Betts.
+Copyright © 2014 Petroules Corporation.
+Copyright © 2014 Big Nerd Ranch.
 All rights reserved.
 
-(MIT — see text above.)
+(MIT — see text above. BackBenchDevs does not claim copyright in Sparkle.)
 
-### WinSparkle
+#### WinSparkle * — required copyright attribution
 
-Copyright (c) Vaclav Slavik and contributors.
-(MIT — see upstream project and text above.)
+Copyright © Vaclav Slavik and contributors.
+(MIT — see upstream project and text above. BackBenchDevs does not claim
+copyright in WinSparkle.)
 
----
-
-## BSD 3-Clause License (representative text)
+### BSD 3-Clause License (representative text)
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -124,24 +131,23 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Applies in whole or in part to the Flutter / Dart SDK and several packages
-(path_provider, shared_preferences, http, etc.).
+Applies in whole or in part to the Flutter / Dart SDK * and several packages
+(path_provider, shared_preferences, http, and others). Those names and
+related marks remain with their respective owners; BackBenchDevs does not
+claim them.
 
----
-
-## Apache License 2.0
+### Apache-2.0
 
 Full text: https://www.apache.org/licenses/LICENSE-2.0
 
 Some Rust crates (for example parts of the rustls / serde dual-license set)
 are available under Apache-2.0 and/or MIT. Where Apache-2.0 applies, the
-NOTICE and license terms of those crates apply.
+NOTICE and license terms of those crates apply. Apache and related marks
+remain with their respective owners; BackBenchDevs does not claim them.
 
----
+### ring (ISC-style) — required copyright attribution
 
-## ring (ISC-style)
-
-Copyright 2015-2025 Brian Smith and contributors.
+Copyright © 2015-2025 Brian Smith and contributors.
 
 Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted, provided that the above
@@ -156,22 +162,18 @@ OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 Additional copyright notices for assembly and third-party code within ring
-appear in the upstream crate.
+appear in the upstream crate. BackBenchDevs does not claim copyright in
+ring.
 
 ---
 
-## Other notices
+## Rights and marks
 
-- Google Play, App Store, and other platform trademarks remain the property
-  of their respective owners.
-- Helmhost and BackBenchDevs are trademarks of BackBenchDevs.
-
-To regenerate a machine-assisted inventory of Rust crate licenses (when
-tools are available), run:
-
-```bash
-./scripts/generate_third_party_notices.sh
-```
-
-Manual curation of this document remains authoritative for shipped builds
-until the generator is fully wired into CI.
+- Third-party copyrights and trademarks (including platform store marks and
+  toolkit names) remain the property of their respective owners. They are
+  mentioned only for identification and license compliance. Helmhost /
+  BackBenchDevs do not claim those rights.
+- “Helmhost” and “BackBenchDevs” are names used by BackBenchDevs for this
+  product and organization. They are not asserted here as registered
+  trademarks. Do not use them to brand competing products without written
+  permission from BackBenchDevs.

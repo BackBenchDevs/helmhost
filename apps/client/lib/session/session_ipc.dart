@@ -10,6 +10,8 @@ const kMethodSessionReplaced = 'session_replaced';
 const kMethodWindowClose = 'window_close';
 /// Close the session Flutter window but keep the native RFB session (attach→tabs).
 const kMethodWindowDismissKeepSession = 'window_dismiss_keep_session';
+/// Hub already confirmed disconnect — tear down RFB + close window (no prompts).
+const kMethodForceDisconnect = 'force_disconnect';
 
 /// Hooks for the active session window engine (set by [SessionPage]).
 class SessionWindowCommands {
@@ -17,6 +19,9 @@ class SessionWindowCommands {
 
   /// Soft-close UI window; leave RFB alive for hub tab reparent.
   static Future<void> Function()? dismissKeepSession;
+
+  /// Hub-confirmed disconnect: skip confirm/reconnect UI, close RFB + window.
+  static Future<void> Function()? forceDisconnect;
 }
 /// Notify the Hub window (non-session). Best-effort; ignores failures.
 Future<void> notifyHub(String method, [Map<String, dynamic>? arguments]) async {
@@ -78,3 +83,11 @@ bool shouldAutoReconnect({
   if (embedded && unknownSession) return false;
   return true;
 }
+
+/// Whether to show Reconnect (or auto-reconnect) after a disconnect event.
+///
+/// Intentional Hub/user close must not surface the unexpected-drop dialog.
+bool shouldOfferReconnectAfterDisconnect({
+  required bool userInitiatedClose,
+}) =>
+    !userInitiatedClose;

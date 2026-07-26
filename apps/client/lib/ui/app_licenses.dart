@@ -15,7 +15,7 @@ Future<void> showAppLicenses({required BuildContext context}) async {
   );
 }
 
-/// Firefox-style licenses viewer: product LICENSE + third-party notices.
+/// Product LICENSE + third-party notices (BackBenchDevs proprietary + deps).
 class AppLicensesDialog extends StatefulWidget {
   const AppLicensesDialog({super.key});
 
@@ -24,7 +24,7 @@ class AppLicensesDialog extends StatefulWidget {
 }
 
 class _AppLicensesDialogState extends State<AppLicensesDialog> {
-  static const _tabs = ['Product', 'Third-party'];
+  static const _tabs = ['Helmhost', 'Third-party'];
   static const _copyright =
       'Copyright © 2026 BackBenchDevs. All rights reserved.';
 

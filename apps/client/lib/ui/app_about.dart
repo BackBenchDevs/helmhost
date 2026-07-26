@@ -195,7 +195,7 @@ Future<void> _checkForUpdates() async {
   }
 }
 
-/// Firefox-inspired About — horizontal layout, no debug, no main scroll.
+/// About dialog — horizontal brand layout (no debug dump on the face).
 class AppAboutDialog extends StatelessWidget {
   const AppAboutDialog({super.key, this.coreVersion});
 
