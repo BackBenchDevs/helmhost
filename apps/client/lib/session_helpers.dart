@@ -269,6 +269,33 @@ class ConnectionProfileCard {
         // when merging is wrong — upsert replaces the whole profile.
         'default_display': defaultDisplay,
       };
+
+  ConnectionProfileCard copyWith({
+    String? id,
+    String? name,
+    String? domain,
+    String? notes,
+    bool? preferVencrypt,
+    bool? acceptInvalidCerts,
+    bool? viewOnly,
+    String? defaultUsername,
+    int? defaultDisplay,
+    bool clearDefaultUsername = false,
+  }) {
+    return ConnectionProfileCard(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      domain: domain ?? this.domain,
+      notes: notes ?? this.notes,
+      preferVencrypt: preferVencrypt ?? this.preferVencrypt,
+      acceptInvalidCerts: acceptInvalidCerts ?? this.acceptInvalidCerts,
+      viewOnly: viewOnly ?? this.viewOnly,
+      defaultUsername: clearDefaultUsername
+          ? null
+          : (defaultUsername ?? this.defaultUsername),
+      defaultDisplay: defaultDisplay ?? this.defaultDisplay,
+    );
+  }
 }
 
 /// Parse default display from profile editor text (empty → null).

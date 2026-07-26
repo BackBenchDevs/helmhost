@@ -20,6 +20,21 @@ Future<String?> resolvePassword({
   return null;
 }
 
+/// Entry username wins over profile `default_username` (group shared account).
+String? resolveUsername({
+  String? entryUsername,
+  String? profileDefaultUsername,
+}) {
+  if (entryUsername != null && entryUsername.trim().isNotEmpty) {
+    return entryUsername.trim();
+  }
+  if (profileDefaultUsername != null &&
+      profileDefaultUsername.trim().isNotEmpty) {
+    return profileDefaultUsername.trim();
+  }
+  return null;
+}
+
 bool isAuthError(Object e) {
   final msg = e is StateError ? e.message : e.toString();
   return parseAuthNeed(msg) != AuthNeed.none;
@@ -67,4 +82,27 @@ Future<void> persistProfileCredentials(
   } else if (clearPassword) {
     await store.deletePassword(key);
   }
+}
+
+/// Write group shared Unix username onto the profile JSON (not the vault).
+void upsertProfileDefaultUsername({
+  required void Function(Map<String, dynamic> profile) profileUpsert,
+  required ConnectionProfileCard profile,
+  required String username,
+}) {
+  final u = username.trim();
+  if (u.isEmpty) return;
+  if ((profile.defaultUsername ?? '').trim() == u) return;
+  profileUpsert(profile.copyWith(defaultUsername: u).toJson());
+}
+
+ConnectionProfileCard? findProfileById(
+  Iterable<ConnectionProfileCard> profiles,
+  String? profileId,
+) {
+  if (profileId == null || profileId.isEmpty) return null;
+  for (final p in profiles) {
+    if (p.id == profileId) return p;
+  }
+  return null;
 }

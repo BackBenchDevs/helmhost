@@ -4,6 +4,43 @@ import 'package:helmhost/session_helpers.dart';
 import 'package:helmhost/storage/credential_store.dart';
 
 void main() {
+  group('resolveUsername', () {
+    test('entry wins over profile default', () {
+      expect(
+        resolveUsername(
+          entryUsername: 'entry',
+          profileDefaultUsername: 'group',
+        ),
+        'entry',
+      );
+    });
+
+    test('falls back to profile default', () {
+      expect(
+        resolveUsername(
+          entryUsername: null,
+          profileDefaultUsername: 'group',
+        ),
+        'group',
+      );
+      expect(
+        resolveUsername(
+          entryUsername: '  ',
+          profileDefaultUsername: ' group ',
+        ),
+        'group',
+      );
+    });
+
+    test('null when both empty', () {
+      expect(resolveUsername(), isNull);
+      expect(
+        resolveUsername(entryUsername: '', profileDefaultUsername: '  '),
+        isNull,
+      );
+    });
+  });
+
   group('resolvePassword', () {
     test('session password wins over vault', () async {
       final store = MemoryCredentialStore();
@@ -125,6 +162,39 @@ void main() {
         clearPassword: true,
       );
       expect(await store.readPassword(key), isNull);
+    });
+  });
+
+  group('upsertProfileDefaultUsername', () {
+    test('writes default_username via upsert', () {
+      Map<String, dynamic>? written;
+      final profile = ConnectionProfileCard(
+        id: 'p1',
+        name: 'Lab',
+        domain: 'lab.internal',
+      );
+      upsertProfileDefaultUsername(
+        profileUpsert: (j) => written = j,
+        profile: profile,
+        username: 'unixuser',
+      );
+      expect(written?['default_username'], 'unixuser');
+      expect(written?['id'], 'p1');
+    });
+
+    test('no-op when unchanged', () {
+      var calls = 0;
+      final profile = ConnectionProfileCard(
+        id: 'p1',
+        name: 'Lab',
+        defaultUsername: 'unixuser',
+      );
+      upsertProfileDefaultUsername(
+        profileUpsert: (_) => calls++,
+        profile: profile,
+        username: 'unixuser',
+      );
+      expect(calls, 0);
     });
   });
 }

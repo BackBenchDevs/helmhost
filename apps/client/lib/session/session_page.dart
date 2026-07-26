@@ -1026,13 +1026,47 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         _sessionUsername = creds.username;
       }
       if (creds.savePermanently) {
+        final profileId = widget.profileId;
         try {
-          await persistEntryCredentials(
-            _creds,
-            entryId,
-            password: creds.password,
-            savePassword: true,
-          );
+          if (profileId != null && profileId.isNotEmpty) {
+            await persistProfileCredentials(
+              _creds,
+              profileId,
+              password: creds.password,
+              savePassword: true,
+            );
+            if (need == AuthNeed.usernamePassword &&
+                creds.username != null &&
+                creds.username!.isNotEmpty) {
+              ConnectionProfileCard? profile;
+              try {
+                for (final raw in _bridge.profileList()) {
+                  if (raw is! Map) continue;
+                  final p = ConnectionProfileCard.fromJson(
+                    Map<String, dynamic>.from(raw),
+                  );
+                  if (p.id == profileId) {
+                    profile = p;
+                    break;
+                  }
+                }
+              } catch (_) {}
+              if (profile != null) {
+                upsertProfileDefaultUsername(
+                  profileUpsert: _bridge.profileUpsertJson,
+                  profile: profile,
+                  username: creds.username!,
+                );
+              }
+            }
+          } else {
+            await persistEntryCredentials(
+              _creds,
+              entryId,
+              password: creds.password,
+              savePassword: true,
+            );
+          }
         } catch (_) {}
       }
       try {

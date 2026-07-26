@@ -491,6 +491,8 @@ class _HubPageState extends State<HubPage> with WindowListener {
       profileId: profileId,
     );
     final port = connectPortForCard(card: card, resolved: resolved);
+    final profileDefaultUsername =
+        findProfileById(_profiles, profileId)?.defaultUsername;
     await _connectTo(
       connectHost,
       port,
@@ -502,7 +504,10 @@ class _HubPageState extends State<HubPage> with WindowListener {
             (resolved?['display_number'] as num?) != null)
           'display_number': (resolved!['display_number'] as num).toInt(),
       },
-      username: (resolved?['username'] as String?) ?? card.username,
+      username: resolveUsername(
+        entryUsername: card.username,
+        profileDefaultUsername: profileDefaultUsername,
+      ),
       password: pwd,
       preferVencrypt:
           (resolved?['prefer_vencrypt'] as bool?) ?? card.preferVencrypt,
@@ -692,6 +697,28 @@ class _HubPageState extends State<HubPage> with WindowListener {
           password: password,
           savePassword: savePassword,
         );
+      }
+      if (persistUsername &&
+          savePasswordToProfile &&
+          profileId != null &&
+          username != null &&
+          username.isNotEmpty) {
+        final profile = findProfileById(_profiles, profileId);
+        if (profile != null) {
+          try {
+            upsertProfileDefaultUsername(
+              profileUpsert: b.profileUpsertJson,
+              profile: profile,
+              username: username,
+            );
+            _reloadCards();
+          } catch (e) {
+            widget.logger.error('profile username upsert failed', {
+              'profileId': profileId,
+              'error': '$e',
+            });
+          }
+        }
       }
       setState(() {
         _sessions.add(OpenSessionRef(

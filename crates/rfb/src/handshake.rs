@@ -11,6 +11,11 @@ pub const SEC_NONE: u8 = 1;
 pub const SEC_VNC_AUTH: u8 = 2;
 pub const SEC_VENCRYPT: u8 = 19;
 /// Tight-style Unix Login (username + password).
+///
+/// Note: modern TigerVNC also assigns type 129 to RSA-AES-256. We only pick
+/// this when None / VNC Auth / VeNCrypt are not chosen first (`pick_security`),
+/// so TurboVNC/Tight Unix Login-only servers work; RA256-only peers need a
+/// separate security implementation.
 pub const SEC_UNIX_LOGIN: u8 = 129;
 pub const SEC_RESULT_OK: u32 = 0;
 
@@ -123,6 +128,27 @@ pub async fn vnc_auth_exchange<S: AsyncRead + AsyncWrite + Unpin>(
     Ok(())
 }
 
+/// Encode Tight Unix Login / Plain credentials (UTF-8 lengths + bytes).
+pub fn encode_unix_login(username: &str, password: &str) -> Vec<u8> {
+    let user = username.as_bytes();
+    let pass = password.as_bytes();
+    let mut out = Vec::with_capacity(8 + user.len() + pass.len());
+    out.extend_from_slice(&(user.len() as u32).to_be_bytes());
+    out.extend_from_slice(&(pass.len() as u32).to_be_bytes());
+    out.extend_from_slice(user);
+    out.extend_from_slice(pass);
+    out
+}
+
+pub async fn unix_login_exchange<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    write_all(stream, &encode_unix_login(username, password)).await?;
+    Ok(())
+}
+
 /// Classic (non-TLS) security + ClientInit/ServerInit. Caller handles VeNCrypt separately.
 pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
@@ -177,9 +203,17 @@ pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
             vnc_auth_exchange(stream, pw).await?;
         }
         SEC_UNIX_LOGIN => {
-            // Auth exchange for Unix Login is not implemented yet; typed need
-            // already surfaced above so the UI can collect username+password.
-            return Err("Unix Login auth not yet implemented".into());
+            let user = creds
+                .username
+                .as_deref()
+                .filter(|u| !u.is_empty())
+                .ok_or_else(|| helmhost_core::NEED_USERNAME_PASSWORD.to_string())?;
+            let pw = creds
+                .password
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| helmhost_core::NEED_USERNAME_PASSWORD.to_string())?;
+            unix_login_exchange(stream, user, pw).await?;
         }
         other => return Err(format!("unsupported security {other}")),
     }
