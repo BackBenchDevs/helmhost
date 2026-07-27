@@ -10,6 +10,13 @@ void main() {
     });
   });
 
+  group('sessionAllowsRemoteInput', () {
+    test('blocks when view-only', () {
+      expect(sessionAllowsRemoteInput(viewOnly: false), isTrue);
+      expect(sessionAllowsRemoteInput(viewOnly: true), isFalse);
+    });
+  });
+
   group('expandPartialHost / shortHost', () {
     test('ava1.bec under bec.broadcom.net', () {
       expect(

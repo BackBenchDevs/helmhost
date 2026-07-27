@@ -26,6 +26,7 @@ class OpenSessionRef {
     this.windowId,
     this.grabbed = true,
     this.profileId,
+    this.viewOnly = false,
     this.bandwidthPreset = BandwidthPreset.balanced,
     this.qualityLevel,
     this.compressLevel,
@@ -38,6 +39,7 @@ class OpenSessionRef {
   final int? windowId;
   final bool grabbed;
   final String? profileId;
+  final bool viewOnly;
   final BandwidthPreset bandwidthPreset;
   final int? qualityLevel;
   final int? compressLevel;
@@ -52,6 +54,7 @@ class OpenSessionRef {
     int? windowId,
     bool? grabbed,
     String? profileId,
+    bool? viewOnly,
     BandwidthPreset? bandwidthPreset,
     int? qualityLevel,
     int? compressLevel,
@@ -65,6 +68,7 @@ class OpenSessionRef {
       windowId: clearWindowId ? null : (windowId ?? this.windowId),
       grabbed: grabbed ?? this.grabbed,
       profileId: profileId ?? this.profileId,
+      viewOnly: viewOnly ?? this.viewOnly,
       bandwidthPreset: bandwidthPreset ?? this.bandwidthPreset,
       qualityLevel: qualityLevel ?? this.qualityLevel,
       compressLevel: compressLevel ?? this.compressLevel,

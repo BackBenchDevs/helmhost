@@ -72,6 +72,7 @@ Future<void> main(List<String> args) async {
     final preferVencrypt = winArgs['prefer_vencrypt'] as bool? ?? false;
     final acceptInvalidCerts =
         winArgs['accept_invalid_certs'] as bool? ?? false;
+    final viewOnly = winArgs['view_only'] as bool? ?? false;
     await windowManager.setTitle(title);
     runApp(SessionApp(
       sessionId: sessionId,
@@ -83,6 +84,7 @@ Future<void> main(List<String> args) async {
       profileId: profileId,
       preferVencrypt: preferVencrypt,
       acceptInvalidCerts: acceptInvalidCerts,
+      viewOnly: viewOnly,
       themeMode: prefs.themeMode,
       prefs: prefs,
     ));
@@ -220,6 +222,7 @@ class SessionApp extends StatelessWidget {
     this.username,
     this.preferVencrypt = false,
     this.acceptInvalidCerts = false,
+    this.viewOnly = false,
     this.themeMode = ThemeMode.system,
     this.prefs,
   });
@@ -233,6 +236,7 @@ class SessionApp extends StatelessWidget {
   final String? username;
   final bool preferVencrypt;
   final bool acceptInvalidCerts;
+  final bool viewOnly;
   final ThemeMode themeMode;
   final AppPrefs? prefs;
 
@@ -254,6 +258,7 @@ class SessionApp extends StatelessWidget {
         username: username,
         preferVencrypt: preferVencrypt,
         acceptInvalidCerts: acceptInvalidCerts,
+        viewOnly: viewOnly,
         closeOnExit: true,
         prefs: prefs,
       ),

@@ -67,6 +67,7 @@ class TabSessionWorkspace extends StatelessWidget {
               active: !paused && s.id == activeSessionId,
               suppressRemoteResize: suppressRemoteResize,
               prefs: prefs,
+              viewOnly: s.viewOnly,
               bandwidthPreset: s.bandwidthPreset,
               qualityLevel: s.qualityLevel,
               compressLevel: s.compressLevel,

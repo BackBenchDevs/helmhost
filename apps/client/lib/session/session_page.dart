@@ -40,6 +40,7 @@ class SessionPage extends StatefulWidget {
     this.username,
     this.preferVencrypt = false,
     this.acceptInvalidCerts = false,
+    this.viewOnly = false,
     this.closeOnExit = true,
     this.active = true,
     this.prefs,
@@ -62,6 +63,7 @@ class SessionPage extends StatefulWidget {
   final String? username;
   final bool preferVencrypt;
   final bool acceptInvalidCerts;
+  final bool viewOnly;
   final bool closeOnExit;
   /// When false (inactive IndexedStack tab), pause poll/timers.
   final bool active;
@@ -632,6 +634,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   Future<void> _pasteToRemote() async {
     if (!_grabbed) return;
+    if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
     if (text == null || text.isEmpty) return;
@@ -1162,6 +1165,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   void _onPointer(Offset global, int buttons) {
     if (!_grabbed || _connState != SessionConnState.live) return;
+    if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
     _lastPointerGlobal = global;
     _focusNode.requestFocus();
     final xy = _remoteXY(global);
@@ -1229,6 +1233,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   void _onScroll(PointerScrollEvent e) {
     if (!_grabbed) return;
+    if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
     _scrollAccX -= e.scrollDelta.dx;
     _scrollAccY -= e.scrollDelta.dy;
     _flushWheel(e.position);
@@ -1236,6 +1241,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   void _onPanZoomUpdate(PointerPanZoomUpdateEvent e) {
     if (!_grabbed) return;
+    if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
     _scrollAccX -= e.panDelta.dx;
     _scrollAccY -= e.panDelta.dy;
     _flushWheel(e.position);
@@ -1244,6 +1250,28 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (!_grabbed || _connState != SessionConnState.live) {
       return KeyEventResult.ignored;
+    }
+    if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) {
+      // Still handle local paste/consume shortcuts; never forward keys.
+      if (event is KeyDownEvent) {
+        final local = classifySessionLocalKeyEvent(event);
+        if (local != null) {
+          final phys = event.physicalKey.usbHidUsage;
+          _swallowedPhys.add(phys);
+          // Paste is no-op via _pasteToRemote when view-only.
+          if (local == SessionLocalShortcut.pasteToRemote) {
+            unawaited(_pasteToRemote());
+          }
+          return KeyEventResult.handled;
+        }
+      }
+      if (event is KeyUpEvent || event is KeyRepeatEvent) {
+        final phys = event.physicalKey.usbHidUsage;
+        if (_swallowedPhys.remove(phys)) {
+          return KeyEventResult.handled;
+        }
+      }
+      return KeyEventResult.handled;
     }
 
     final phys = event.physicalKey.usbHidUsage;
@@ -1401,6 +1429,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
           port: widget.port,
           scaleMode: _scaleMode,
           grabbed: _grabbed,
+          viewOnly: widget.viewOnly,
           onPaste: _pasteToRemote,
           onScaleChanged: _setScaleMode,
           onToggleGrab: () => _setGrabbed(!_grabbed),

@@ -42,6 +42,7 @@ class SessionStatusBar extends StatelessWidget {
     required this.onPaste,
     required this.onScaleChanged,
     required this.onToggleGrab,
+    this.viewOnly = false,
     this.errorText,
     this.reconnectAttempt = 0,
     this.maxReconnectAttempts = 3,
@@ -59,6 +60,7 @@ class SessionStatusBar extends StatelessWidget {
   final int port;
   final ViewScaleMode scaleMode;
   final bool grabbed;
+  final bool viewOnly;
   final VoidCallback onPaste;
   final ValueChanged<ViewScaleMode> onScaleChanged;
   final VoidCallback onToggleGrab;
@@ -216,6 +218,14 @@ class SessionStatusBar extends StatelessWidget {
                   ),
                 ),
               ),
+              if (viewOnly)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6),
+                  child: Text(
+                    'View only',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                  ),
+                ),
               if (errorText != null &&
                   errorText!.isNotEmpty &&
                   connState != SessionConnState.live) ...[
@@ -246,14 +256,15 @@ class SessionStatusBar extends StatelessWidget {
                 icon: const Icon(Icons.help_outline),
               ),
               IconButton(
-                tooltip:
-                    'Paste (⌘V / Shift+Insert). Copy: use remote shortcut '
-                    '(e.g. Ctrl+Shift+C), syncs to Mac clipboard.',
+                tooltip: viewOnly
+                    ? 'Paste disabled (view only)'
+                    : 'Paste (⌘V / Shift+Insert). Copy: use remote shortcut '
+                        '(e.g. Ctrl+Shift+C), syncs to Mac clipboard.',
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 26),
                 iconSize: 16,
-                onPressed: onPaste,
+                onPressed: viewOnly ? null : onPaste,
                 icon: const Icon(Icons.content_paste),
               ),
               PopupMenuButton<ViewScaleMode>(

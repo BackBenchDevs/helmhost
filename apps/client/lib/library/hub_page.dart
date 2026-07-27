@@ -390,6 +390,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
     String? profileId,
     bool preferVencrypt = false,
     bool acceptInvalidCerts = false,
+    bool viewOnly = false,
   }) async {
     final args = jsonEncode({
       'role': 'session',
@@ -402,6 +403,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       if (profileId != null) 'profile_id': profileId,
       'prefer_vencrypt': preferVencrypt,
       'accept_invalid_certs': acceptInvalidCerts,
+      'view_only': viewOnly,
     });
     for (final c in await WindowController.getAll()) {
       if (c.arguments.isEmpty) continue;
@@ -513,6 +515,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
           (resolved?['prefer_vencrypt'] as bool?) ?? card.preferVencrypt,
       acceptInvalidCerts: (resolved?['accept_invalid_certs'] as bool?) ??
           card.acceptInvalidCerts,
+      viewOnly: (resolved?['view_only'] as bool?) ?? card.viewOnly,
       displayName: card.displayName,
       profileId: profileId,
     );
@@ -536,6 +539,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
     String? password,
     bool preferVencrypt = false,
     bool acceptInvalidCerts = false,
+    bool viewOnly = false,
     bool savePassword = false,
     String? profileId,
     bool savePasswordToProfile = false,
@@ -569,6 +573,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
             profileId: profileId,
             preferVencrypt: preferVencrypt,
             acceptInvalidCerts: acceptInvalidCerts,
+            viewOnly: viewOnly || existing.viewOnly,
           );
         }
         if (mounted) {
@@ -597,6 +602,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         displayName: displayName,
         preferVencrypt: preferVencrypt,
         acceptInvalidCerts: acceptInvalidCerts,
+        viewOnly: viewOnly,
         savePassword: savePassword,
         shell: shell,
         profileId: profileId,
@@ -617,6 +623,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
     String? password,
     bool preferVencrypt = false,
     bool acceptInvalidCerts = false,
+    bool viewOnly = false,
     bool savePassword = false,
     bool persistUsername = false,
     SessionShell shell = SessionShell.windows,
@@ -642,6 +649,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
         'port': port,
         'sessionId': id,
         'vencrypt': preferVencrypt,
+        'viewOnly': viewOnly,
         'shell': shell.prefsKey,
       });
       b.grab(id);
@@ -654,6 +662,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
             'display_number': displayFromPort(port),
             'prefer_vencrypt': preferVencrypt,
             'accept_invalid_certs': acceptInvalidCerts,
+            'view_only': viewOnly,
           };
       upsert = _mergeEntryPreserving(upsert, key);
       upsert['last_connected_at'] =
@@ -727,6 +736,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
           port: port,
           shell: shell,
           profileId: profileId,
+          viewOnly: viewOnly,
           bandwidthPreset: BandwidthPresetX.fromPrefs(
             upsert['bandwidth_preset'] as String?,
           ),
@@ -750,6 +760,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
           profileId: profileId,
           preferVencrypt: preferVencrypt,
           acceptInvalidCerts: acceptInvalidCerts,
+          viewOnly: viewOnly,
         );
       }
     } on StateError catch (e) {
@@ -772,6 +783,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
           displayName: displayName,
           preferVencrypt: preferVencrypt,
           acceptInvalidCerts: acceptInvalidCerts,
+          viewOnly: viewOnly,
           savePassword: savePassword || creds.savePermanently,
           persistUsername: need == AuthNeed.usernamePassword,
           shell: shell,
@@ -909,6 +921,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
             ),
         preferVencrypt: merged['prefer_vencrypt'] as bool? ?? false,
         acceptInvalidCerts: merged['accept_invalid_certs'] as bool? ?? false,
+        viewOnly: merged['view_only'] as bool? ?? false,
         savePassword: result.savePassword,
         profileId: merged['profile_id'] as String?,
       );
@@ -1172,6 +1185,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       password: pwd,
       preferVencrypt: entry['prefer_vencrypt'] as bool? ?? false,
       acceptInvalidCerts: entry['accept_invalid_certs'] as bool? ?? false,
+      viewOnly: entry['view_only'] as bool? ?? false,
       displayName: entry['display_name'] as String? ?? displayName,
       profileId: profileId,
     );

@@ -12,6 +12,9 @@ export 'session/bandwidth_preset.dart';
 
 String sessionKey(String host, int port) => '$host:$port';
 
+/// Pointer, key, and clipboard-to-remote must not be sent when view-only.
+bool sessionAllowsRemoteInput({required bool viewOnly}) => !viewOnly;
+
 int portFromDisplay(int display) => 5900 + display;
 
 int? displayFromPort(int port) {
