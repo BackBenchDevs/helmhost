@@ -124,16 +124,15 @@ pub async fn connect_tcp_with_timeout(
     {
         Ok(handle) => Ok(handle),
         Err(e) if prefer_vencrypt && is_vencrypt_fallback_error(&e) => {
-            let stream =
-                tokio::time::timeout(connect_timeout, TcpStream::connect(&addr))
-                    .await
-                    .map_err(|_| {
-                        format!(
-                            "connect {addr} (fallback): timed out after {}s",
-                            connect_timeout.as_secs().max(1)
-                        )
-                    })?
-                    .map_err(|re| format!("connect {addr} (fallback): {re}"))?;
+            let stream = tokio::time::timeout(connect_timeout, TcpStream::connect(&addr))
+                .await
+                .map_err(|_| {
+                    format!(
+                        "connect {addr} (fallback): timed out after {}s",
+                        connect_timeout.as_secs().max(1)
+                    )
+                })?
+                .map_err(|re| format!("connect {addr} (fallback): {re}"))?;
             connect_stream(id, stream, host, creds, tls, false, encodings)
                 .await
                 .map_err(|e2| format!("{e}; classic fallback failed: {e2}"))
