@@ -180,6 +180,56 @@ void main() {
     expect(result!.entry['favorite'], isTrue);
   });
 
+  testWidgets('Properties OK with group domain keeps existing id',
+      (tester) async {
+    ConnectionEditorResult? result;
+    const card = LibraryCard(
+      id: 'box:5900',
+      host: 'box',
+      port: 5900,
+      profileId: 'p-lab',
+      displayName: 'Box',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await showPropertiesDialog(
+                  context,
+                  existing: card,
+                  credentials: MemoryCredentialStore(),
+                  profiles: const [
+                    ProfileChoice.named(
+                      'p-lab',
+                      'Lab',
+                      domain: 'lab.internal',
+                    ),
+                  ],
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(result, isNotNull);
+    // Without the fix this would become box.lab.internal:5900 and fork a row.
+    expect(result!.entry['id'], 'box:5900');
+    expect(result!.entry['host'], 'box');
+    expect(result!.entry['profile_id'], 'p-lab');
+    expect(
+      sessionKey(qualifyHost('box', 'lab.internal'), 5900),
+      'box.lab.internal:5900',
+    );
+  });
+
   test('applyProfileDefaultsToDraft maps encryption and certs', () {
     const profile = ConnectionProfileCard(
       id: 'p1',

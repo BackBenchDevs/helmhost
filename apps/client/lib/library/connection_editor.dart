@@ -888,7 +888,8 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
     final port = int.tryParse(_port.text.trim()) ?? 5900;
     final connectHost =
         (domain != null && domain.isNotEmpty) ? qualifyHost(host, domain) : host;
-    final id = sessionKey(connectHost, port);
+    // Edit must keep stable registry id; recomputing from FQDN forks a duplicate.
+    final id = widget.existing?.id ?? sessionKey(connectHost, port);
     return {
       'id': id,
       'host': host,

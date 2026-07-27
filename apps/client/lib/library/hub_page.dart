@@ -499,7 +499,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       entry: {
         ...card.toJson(),
         'host': card.host,
-        'id': sessionKey(connectHost, port),
+        'id': card.id,
         if (card.displayNumber == null &&
             (resolved?['display_number'] as num?) != null)
           'display_number': (resolved!['display_number'] as num).toInt(),
@@ -820,6 +820,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
     if (b == null) return;
     var merged =
         _mergeEntryPreserving(result.entry, result.entry['id'] as String);
+    if (editing != null) {
+      merged = {...merged, 'id': editing.id};
+    }
 
     final port = (merged['port'] as num?)?.toInt() ?? 5900;
     final qualifiedHost = () {
