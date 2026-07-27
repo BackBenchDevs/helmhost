@@ -301,7 +301,12 @@ class SessionStatusBar extends StatelessWidget {
                   textStyle: const TextStyle(fontSize: 11),
                 ),
                 onPressed: onToggleGrab,
-                child: Text(grabbed ? 'Release input' : 'Grab input'),
+                child: Tooltip(
+                  message: grabbed
+                      ? 'Release: button, Right ⌘/Ctrl, or click outside'
+                      : 'Grab keyboard and mouse for the remote',
+                  child: Text(grabbed ? 'Release input' : 'Grab input'),
+                ),
               ),
               Builder(
                 builder: (ctx) => IconButton(

@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   package:
@@ -196,15 +197,51 @@ jobs:
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Commit appcast for Pages
+      # master is PR-protected; GITHUB_TOKEN cannot push appcast directly.
+      # Open a PR (Pages picks up docs/appcast after merge). Optional secret
+      # APPCAST_PUSH_TOKEN (PAT with contents+PR, and merge/bypass rights)
+      # enables squash-merge of that PR.
+      - name: Open appcast PR for Pages
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.APPCAST_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+          AUTO_MERGE_APPCAST: ${{ secrets.APPCAST_PUSH_TOKEN != '' }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p /tmp/helmhost-appcast
+          cp -a docs/appcast/. /tmp/helmhost-appcast/
+          git fetch origin master
+          BRANCH="chore/appcast-${GITHUB_REF_NAME}"
+          git checkout -B "$BRANCH" origin/master
+          mkdir -p docs/appcast
+          cp -a /tmp/helmhost-appcast/. docs/appcast/
           git add docs/appcast/
           if git diff --cached --quiet; then
-            echo "appcast unchanged"
+            echo "appcast unchanged vs master"
+            exit 0
+          fi
+
+          git commit -m "chore(release): update appcast for ${GITHUB_REF_NAME}"
+          git push -u origin "HEAD:${BRANCH}" --force
+
+          PR="$(gh pr list --head "$BRANCH" --base master --json number --jq '.[0].number // empty')"
+          if [[ -z "$PR" ]]; then
+            gh pr create \
+              --base master \
+              --head "$BRANCH" \
+              --title "chore(release): update appcast for ${GITHUB_REF_NAME}" \
+              --body "Auto-generated Sparkle/WinSparkle feed from the Release workflow for \`${GITHUB_REF_NAME}\`. Merge to refresh GitHub Pages (\`appcast.xml\` / \`appcast-rcs.xml\`)."
+            PR="$(gh pr list --head "$BRANCH" --base master --json number --jq '.[0].number')"
+          fi
+          echo "appcast PR #$PR"
+
+          if [[ "${AUTO_MERGE_APPCAST}" == "true" ]]; then
+            gh pr merge "$PR" --squash --delete-branch --admin \
+              || gh pr merge "$PR" --squash --delete-branch \
+              || echo "warning: could not auto-merge appcast PR #$PR — merge manually" >&2
           else
-            git commit -m "chore(release): update appcast for ${GITHUB_REF_NAME}"
-            git push origin HEAD:master
+            echo "Set repo secret APPCAST_PUSH_TOKEN to auto-merge appcast PRs (optional)."
           fi

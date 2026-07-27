@@ -3,9 +3,11 @@
 #include <optional>
 
 #include "desktop_multi_window/desktop_multi_window_plugin.h"
+#include "exclusive_grab.h"
 #include "flutter/generated_plugin_registrant.h"
 #include "helmhost_about.h"
 #include "resource.h"
+#include "session_plugin_registrant.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -25,12 +27,16 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  ExclusiveGrab::Attach(flutter_controller_->engine()->messenger(), GetHandle());
   // Secondary engines from desktop_multi_window need their own plugin set;
   // without this, session windows stay blank (window_manager MissingPlugin).
+  // Skip AutoUpdater — WinSparkle is a process-wide singleton.
   DesktopMultiWindowSetWindowCreatedCallback([](void *controller) {
     auto *flutter_view_controller =
         reinterpret_cast<flutter::FlutterViewController *>(controller);
-    RegisterPlugins(flutter_view_controller->engine());
+    RegisterSessionPlugins(flutter_view_controller->engine());
+    ExclusiveGrab::Attach(flutter_view_controller->engine()->messenger(),
+                          flutter_view_controller->view()->GetNativeWindow());
   });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
@@ -52,6 +58,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  ExclusiveGrab::Detach();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -63,6 +70,9 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (ExclusiveGrabHandleAppMessage(hwnd, message, wparam, lparam)) {
+    return 0;
+  }
   if (flutter_controller_) {
     std::optional<LRESULT> result =
         flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,

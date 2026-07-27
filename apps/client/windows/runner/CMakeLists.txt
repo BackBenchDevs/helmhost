@@ -9,6 +9,8 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "helmhost_about.cpp"
+  "exclusive_grab.cpp"
+  "session_plugin_registrant.cc"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"

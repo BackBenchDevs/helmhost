@@ -99,6 +99,29 @@ void main() {
         isNull,
       );
     });
+
+    test('exclusiveGrab forwards Meta+V and Meta+C', () {
+      expect(
+        classifySessionLocalShortcut(
+          key: LogicalKeyboardKey.keyV,
+          shift: false,
+          control: false,
+          meta: true,
+          exclusiveGrab: true,
+        ),
+        isNull,
+      );
+      expect(
+        classifySessionLocalShortcut(
+          key: LogicalKeyboardKey.keyC,
+          shift: false,
+          control: false,
+          meta: true,
+          exclusiveGrab: true,
+        ),
+        isNull,
+      );
+    });
   });
 
   group('isPasteToRemoteShortcut', () {

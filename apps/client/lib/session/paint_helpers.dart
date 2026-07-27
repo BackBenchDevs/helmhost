@@ -1,5 +1,8 @@
 export 'fb_texture.dart' show DamageRect, unionDamage;
 
+/// Move coalescing interval — independent of Flutter paint frames.
+const Duration kPointerFlushInterval = Duration(milliseconds: 4);
+
 /// Whether a pointer event must flush immediately (button edge) vs coalesce.
 bool shouldFlushPointerImmediate({
   required int buttons,

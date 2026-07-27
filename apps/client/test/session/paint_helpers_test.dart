@@ -44,6 +44,13 @@ void main() {
     });
   });
 
+  group('kPointerFlushInterval', () {
+    test('is sub-frame for responsive moves', () {
+      expect(kPointerFlushInterval.inMilliseconds, lessThan(16));
+      expect(kPointerFlushInterval.inMilliseconds, greaterThan(0));
+    });
+  });
+
   group('shouldFallbackToDartDecode', () {
     test('presentOk never falls back', () {
       expect(

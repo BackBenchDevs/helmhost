@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod auth;
+pub mod dirty_coalesce;
 pub mod encoding;
 pub mod factory;
 pub mod fb_cache;
@@ -13,6 +14,8 @@ pub mod session;
 pub mod tight;
 pub mod vencrypt;
 pub mod zrle;
+
+pub use dirty_coalesce::DirtyCoalescer;
 
 pub use encoding::{
     compress_level_encoding, encoding_name, encodings_with_quality_compress, preferred_encodings,

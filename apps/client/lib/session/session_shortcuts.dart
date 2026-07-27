@@ -13,7 +13,10 @@ enum SessionLocalShortcut {
 
 /// Classify a key-down as a local viewer shortcut, or null to forward RFB.
 ///
-/// Matches TigerVNC / RuVNC conventions:
+/// When [exclusiveGrab] is true, all chords forward to the remote (status-bar
+/// Paste covers clipboard); only the native release chord is local.
+///
+/// Matches TigerVNC / RuVNC conventions when not exclusive:
 /// - **⌘V** (Meta+V): paste local → remote
 /// - **Shift+Insert**: paste local → remote (X11)
 /// - **⌘C / ⌘X**: consume locally (do not send); remote copy is Ctrl(+Shift)+C
@@ -24,12 +27,14 @@ bool isSessionLocalShortcut({
   required bool shift,
   required bool control,
   required bool meta,
+  bool exclusiveGrab = false,
 }) =>
     classifySessionLocalShortcut(
       key: key,
       shift: shift,
       control: control,
       meta: meta,
+      exclusiveGrab: exclusiveGrab,
     ) !=
     null;
 
@@ -38,7 +43,10 @@ SessionLocalShortcut? classifySessionLocalShortcut({
   required bool shift,
   required bool control,
   required bool meta,
+  bool exclusiveGrab = false,
 }) {
+  if (exclusiveGrab) return null;
+
   // Never steal Control chords — those are for the remote (terminals, etc.).
   if (control && !meta) return null;
 
@@ -55,7 +63,10 @@ SessionLocalShortcut? classifySessionLocalShortcut({
   return null;
 }
 
-SessionLocalShortcut? classifySessionLocalKeyEvent(KeyEvent event) {
+SessionLocalShortcut? classifySessionLocalKeyEvent(
+  KeyEvent event, {
+  bool exclusiveGrab = false,
+}) {
   if (event is! KeyDownEvent) return null;
   final keys = HardwareKeyboard.instance.logicalKeysPressed;
   final shift = keys.contains(LogicalKeyboardKey.shiftLeft) ||
@@ -71,6 +82,7 @@ SessionLocalShortcut? classifySessionLocalKeyEvent(KeyEvent event) {
     shift: shift,
     control: control,
     meta: meta,
+    exclusiveGrab: exclusiveGrab,
   );
 }
 

@@ -1,5 +1,6 @@
 //! Async RFB session: handshake then reader + writer tasks on command/event queues.
 
+use crate::dirty_coalesce::DirtyCoalescer;
 use crate::encoding::ENC_TIGHT;
 use crate::encoding::{encoding_name, rect_fits_framebuffer, RectAction};
 use crate::handshake::{
@@ -292,7 +293,8 @@ where
 }
 
 async fn send_event(tx: &mpsc::Sender<SessionEvent>, ev: SessionEvent) {
-    // Always await: try_send was dropping framebuffer damage under load → black UI.
+    // Await for must-not-lose events (resize, bell, clipboard, error, disconnect).
+    // FramebufferDirty uses DirtyCoalescer::send_dirty instead.
     let _ = tx.send(ev).await;
 }
 
@@ -345,6 +347,8 @@ async fn reader_loop<R: AsyncRead + Unpin>(
     // RFC 6143: one zlib stream per encoding type, shared across rects.
     let mut zrle = ZrleStream::new();
     let mut tight = TightStream::new();
+    // Dirty notifies try_send + coalesce; never block reader on full queue.
+    let dirty_tx = DirtyCoalescer::new();
     loop {
         let mut typ = [0u8; 1];
         match rd.read_exact(&mut typ).await {
@@ -376,7 +380,7 @@ async fn reader_loop<R: AsyncRead + Unpin>(
                     }
                 }
                 if let Some(rect) = dirty {
-                    send_event(&ev_tx, SessionEvent::FramebufferDirty { rect }).await;
+                    dirty_tx.send_dirty(&ev_tx, rect);
                 }
                 let (need_request, cu_refresh, w, h) = {
                     let mut g = state.lock().await;

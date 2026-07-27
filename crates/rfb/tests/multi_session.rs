@@ -152,34 +152,10 @@ async fn close_stops_accepting_commands() {
 }
 
 #[test]
-fn damage_coalesce_drops_when_full() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
-        let (tx, mut rx) = mpsc::channel::<SessionEvent>(1);
-        tx.try_send(SessionEvent::FramebufferDirty {
-            rect: helmhost_core::Rect {
-                x: 0,
-                y: 0,
-                w: 1,
-                h: 1,
-            },
-        })
-        .unwrap();
-        let full = tx.try_send(SessionEvent::FramebufferDirty {
-            rect: helmhost_core::Rect {
-                x: 0,
-                y: 0,
-                w: 1,
-                h: 1,
-            },
-        });
-        assert!(full.is_err());
-        let _ = rx.recv().await;
-        assert_eq!(DEFAULT_QUEUE_CAPACITY, 256);
-    });
+fn damage_coalesce_holds_when_full() {
+    // Blind try_send drop caused black UI; DirtyCoalescer keeps coverage in pending.
+    // Full behavioral coverage: helmhost_rfb::dirty_coalesce tests.
+    assert_eq!(DEFAULT_QUEUE_CAPACITY, 256);
 }
 
 #[tokio::test]

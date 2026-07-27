@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../bridge.dart';
+import '../input/exclusive_grab.dart';
 import '../keysyms.dart';
 import '../library/auth_dialog.dart';
 import '../logging/logger.dart';
@@ -106,6 +107,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   int _fh = 0;
   bool _grabbed = true;
   bool _dirty = false;
+  /// True while a present/decode is in flight — further dirty only unions damage
+  /// and re-schedules after (skip intermediate presents; latest FB wins).
   bool _pulling = false;
   bool _paintScheduled = false;
   DamageRect? _pendingDamage;
@@ -115,7 +118,11 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   int? _pendingPtrY;
   int _pendingPtrButtons = 0;
   int _lastSentButtons = 0;
-  bool _pointerFlushScheduled = false;
+  Timer? _pointerFlushTimer;
+  bool _exclusiveGrabActive = false;
+  final _exclusiveGrab = ExclusiveGrab();
+  /// Right Cmd/Ctrl was pressed with no other keys — candidate for release.
+  bool _releaseChordArmed = false;
   bool _hubNotifiedEnd = false;
   bool _sessionTornDown = false;
   bool _windowClosing = false;
@@ -123,6 +130,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   bool _keepSessionOnClose = false;
   bool _reconnectDialogShowing = false;
   bool _pollStoppedForStale = false;
+  /// True once [dispose] begins — skip setState from soft-dispose teardown.
+  bool _disposing = false;
   String? _lastError;
   SessionConnState _connState = SessionConnState.connecting;
   int _reconnectAttempt = 0;
@@ -214,6 +223,9 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     try {
       _bridge.grab(_sessionId);
     } catch (_) {}
+    if (_grabbed) {
+      unawaited(_startExclusiveGrab());
+    }
     _ensureTimers();
     _armFirstFrameTimeout();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -245,7 +257,13 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _firstFrameTimer?.cancel();
     _firstFrameTimer = null;
     _resizeDebounce?.cancel();
-    _releaseAllKeys();
+    _pointerFlushTimer?.cancel();
+    _pointerFlushTimer = null;
+    if (_grabbed) {
+      _setGrabbed(false);
+    } else {
+      _releaseAllKeys();
+    }
     try {
       _bridge.releaseFocus();
     } catch (_) {}
@@ -533,13 +551,16 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
 
   @override
   void onWindowFocus() {
+    // Do not auto-regrab — exclusive grab only via Grab button or FB click.
     if (!mounted || !widget.active) return;
-    if (_connState != SessionConnState.live) return;
-    if (!_grabbed) _setGrabbed(true);
+    if (_grabbed) _focusNode.requestFocus();
   }
 
   @override
   void dispose() {
+    _disposing = true;
+    _pointerFlushTimer?.cancel();
+    unawaited(_stopExclusiveGrab());
     if (widget.closeOnExit) {
       SessionWindowCommands.dismissKeepSession = null;
       SessionWindowCommands.forceDisconnect = null;
@@ -569,19 +590,79 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     }
     _downKeysyms.clear();
     _swallowedPhys.clear();
+    _releaseChordArmed = false;
+  }
+
+  Future<void> _startExclusiveGrab() async {
+    if (_exclusiveGrabActive || !_exclusiveGrab.isSupported) return;
+    if (widget.viewOnly) return;
+    try {
+      await _exclusiveGrab.start(
+        onKey: _onExclusiveKeysym,
+        onReleaseChord: () {
+          if (mounted && _grabbed) _setGrabbed(false);
+        },
+      );
+      _exclusiveGrabActive = true;
+    } catch (e) {
+      widget.logger.warn('exclusive grab start failed', {'error': '$e'});
+      _exclusiveGrabActive = false;
+    }
+  }
+
+  Future<void> _stopExclusiveGrab() async {
+    if (!_exclusiveGrabActive && !_exclusiveGrab.isActive) return;
+    _exclusiveGrabActive = false;
+    try {
+      await _exclusiveGrab.stop();
+    } catch (_) {}
+  }
+
+  void _onExclusiveKeysym(int keysym, bool down) {
+    if (!mounted || !_grabbed || _connState != SessionConnState.live) return;
+    if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
+    // Track by keysym for exclusive path (no physical key id).
+    final track = keysym;
+    if (!down) {
+      if (!_downKeysyms.containsKey(track) &&
+          !_downKeysyms.values.contains(keysym)) {
+        // Still send up in case we missed down tracking.
+      }
+      _downKeysyms.removeWhere((_, v) => v == keysym);
+      try {
+        _bridge.sendKey(_sessionId, false, keysym);
+      } catch (_) {}
+      return;
+    }
+    _downKeysyms[track] = keysym;
+    try {
+      _bridge.sendKey(_sessionId, true, keysym);
+    } catch (_) {}
   }
 
   void _setGrabbed(bool grab) {
+    if (grab == _grabbed) {
+      if (grab && mounted) _focusNode.requestFocus();
+      return;
+    }
     if (grab) {
-      _bridge.grab(_sessionId);
-      _focusNode.requestFocus();
+      try {
+        _bridge.grab(_sessionId);
+      } catch (_) {}
+      if (mounted) _focusNode.requestFocus();
+      unawaited(_startExclusiveGrab());
     } else {
       _pendingPtrButtons = 0;
       _flushPointerNow();
       _releaseAllKeys();
-      _bridge.releaseFocus();
+      try {
+        _bridge.releaseFocus();
+      } catch (_) {}
+      unawaited(_stopExclusiveGrab());
     }
-    setState(() => _grabbed = grab);
+    _grabbed = grab;
+    // dispose → softDispose calls us while the element is already unmounting.
+    if (!_disposing && mounted) setState(() {});
   }
 
   Future<void> _setScaleMode(ViewScaleMode m) async {
@@ -1164,10 +1245,20 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   Offset? _lastPointerGlobal;
 
   void _onPointer(Offset global, int buttons) {
+    // Click into framebuffer re-grabs after release / focus loss.
+    if (!_grabbed) {
+      if (buttons == 0) return;
+      if (_connState != SessionConnState.live) return;
+      if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
+      _setGrabbed(true);
+    }
     if (!_grabbed || _connState != SessionConnState.live) return;
     if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
     _lastPointerGlobal = global;
-    _focusNode.requestFocus();
+    // Focus only on press/drag, not every hover sample.
+    if (buttons != 0) {
+      _focusNode.requestFocus();
+    }
     final xy = _remoteXY(global);
     if (xy == null) return;
     final immediate = shouldFlushPointerImmediate(
@@ -1178,6 +1269,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _pendingPtrY = xy.$2;
     _pendingPtrButtons = buttons;
     if (immediate) {
+      _pointerFlushTimer?.cancel();
+      _pointerFlushTimer = null;
       _flushPointerNow();
       return;
     }
@@ -1185,13 +1278,11 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   }
 
   void _schedulePointerFlush() {
-    if (_pointerFlushScheduled) return;
-    _pointerFlushScheduled = true;
-    SchedulerBinding.instance.scheduleFrameCallback((_) {
-      _pointerFlushScheduled = false;
+    if (_pointerFlushTimer?.isActive ?? false) return;
+    _pointerFlushTimer = Timer(kPointerFlushInterval, () {
+      _pointerFlushTimer = null;
       _flushPointerNow();
     });
-    SchedulerBinding.instance.scheduleFrame();
   }
 
   void _flushPointerNow() {
@@ -1201,7 +1292,12 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     try {
       _bridge.sendPointer(_sessionId, x, y, _pendingPtrButtons);
       _lastSentButtons = _pendingPtrButtons;
-    } catch (_) {}
+    } catch (e) {
+      widget.logger.debug('sendPointer failed', {
+        'sessionId': _sessionId,
+        'error': '$e',
+      });
+    }
   }
 
   void _flushWheel(Offset global) {
@@ -1251,6 +1347,27 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     if (!_grabbed || _connState != SessionConnState.live) {
       return KeyEventResult.ignored;
     }
+
+    // Fallback release chord when native exclusive grab is unavailable.
+    if (!_exclusiveGrabActive && isExclusiveReleaseKey(event.logicalKey)) {
+      if (event is KeyDownEvent) {
+        _releaseChordArmed = true;
+        return KeyEventResult.handled;
+      }
+      if (event is KeyUpEvent && _releaseChordArmed) {
+        _releaseChordArmed = false;
+        _setGrabbed(false);
+        return KeyEventResult.handled;
+      }
+    } else if (event is KeyDownEvent) {
+      _releaseChordArmed = false;
+    }
+
+    // Native hook owns the keyboard while exclusive grab is active.
+    if (_exclusiveGrabActive) {
+      return KeyEventResult.handled;
+    }
+
     if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) {
       // Still handle local paste/consume shortcuts; never forward keys.
       if (event is KeyDownEvent) {
@@ -1258,7 +1375,6 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         if (local != null) {
           final phys = event.physicalKey.usbHidUsage;
           _swallowedPhys.add(phys);
-          // Paste is no-op via _pasteToRemote when view-only.
           if (local == SessionLocalShortcut.pasteToRemote) {
             unawaited(_pasteToRemote());
           }
@@ -1296,7 +1412,6 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         if (local == SessionLocalShortcut.pasteToRemote) {
           unawaited(_pasteToRemote());
         }
-        // consume (⌘C / ⌘X): remote→local copy is ServerCutText → clipboard
         return KeyEventResult.handled;
       }
     }
