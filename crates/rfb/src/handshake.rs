@@ -9,14 +9,20 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub const RFB_003_008: &[u8] = b"RFB 003.008\n";
 pub const SEC_NONE: u8 = 1;
 pub const SEC_VNC_AUTH: u8 = 2;
+/// TigerVNC RSA-AES-128 (all encrypted).
+pub const SEC_RA2: u8 = 5;
+/// TigerVNC RSA-AES-128 (auth only).
+pub const SEC_RA2NE: u8 = 6;
 pub const SEC_VENCRYPT: u8 = 19;
-/// Tight-style Unix Login (username + password).
+/// Tight-style Unix Login (username + password) **or** TigerVNC RA2_256.
 ///
-/// Note: modern TigerVNC also assigns type 129 to RSA-AES-256. We only pick
-/// this when None / VNC Auth / VeNCrypt are not chosen first (`pick_security`),
-/// so TurboVNC/Tight Unix Login-only servers work; RA256-only peers need a
-/// separate security implementation.
+/// Disambiguation: if type 129 appears with 5/6/130, treat as RA256; if alone
+/// with a username, prefer Unix Login (see [`pick_security`]).
 pub const SEC_UNIX_LOGIN: u8 = 129;
+/// TigerVNC RSA-AES-256 (all encrypted). Same numeric id as [`SEC_UNIX_LOGIN`].
+pub const SEC_RA256: u8 = 129;
+/// TigerVNC RSA-AES-256 (auth only).
+pub const SEC_RANE256: u8 = 130;
 pub const SEC_RESULT_OK: u32 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,22 +66,59 @@ pub fn parse_security_types(buf: &[u8]) -> Result<Vec<u8>, String> {
 pub fn pick_security(
     types: &[u8],
     have_password: bool,
-    allow_vencrypt: bool,
+    prefer_vencrypt: bool,
 ) -> Result<u8, String> {
-    if allow_vencrypt && types.contains(&SEC_VENCRYPT) {
+    pick_security_ex(types, have_password, false, prefer_vencrypt)
+}
+
+/// Like [`pick_security`] with username presence (disambiguates type 129).
+pub fn pick_security_ex(
+    types: &[u8],
+    have_password: bool,
+    have_username: bool,
+    prefer_vencrypt: bool,
+) -> Result<u8, String> {
+    let has = |t: u8| types.contains(&t);
+    let has_ra_other = has(SEC_RA2) || has(SEC_RA2NE) || has(SEC_RANE256);
+    // Type 129 is RA256 when RA family present, or when no username (can't be Unix Login).
+    let treat_129_as_ra256 = has(129) && (has_ra_other || !have_username);
+    let has_classic =
+        has(SEC_NONE) || has(SEC_VNC_AUTH) || (has(129) && have_username && !has_ra_other);
+
+    if has(SEC_VENCRYPT) && (prefer_vencrypt || !has_classic) {
         return Ok(SEC_VENCRYPT);
     }
-    if have_password && types.contains(&SEC_VNC_AUTH) {
+
+    // RSA-AES (prefer ne variants when both available — clearer session path).
+    if treat_129_as_ra256 || has_ra_other {
+        if has(SEC_RANE256) {
+            return Ok(SEC_RANE256);
+        }
+        if treat_129_as_ra256 {
+            return Ok(SEC_RA256);
+        }
+        if has(SEC_RA2NE) {
+            return Ok(SEC_RA2NE);
+        }
+        if has(SEC_RA2) {
+            return Ok(SEC_RA2);
+        }
+    }
+
+    if have_password && has(SEC_VNC_AUTH) {
         return Ok(SEC_VNC_AUTH);
     }
-    if types.contains(&SEC_NONE) {
+    if has(SEC_NONE) {
         return Ok(SEC_NONE);
     }
-    if types.contains(&SEC_VNC_AUTH) {
+    if has(SEC_VNC_AUTH) {
         return Ok(SEC_VNC_AUTH);
     }
-    if types.contains(&SEC_UNIX_LOGIN) {
+    if has(129) && have_username && !has_ra_other {
         return Ok(SEC_UNIX_LOGIN);
+    }
+    if has(SEC_VENCRYPT) {
+        return Ok(SEC_VENCRYPT);
     }
     Err(format!("no supported security in {types:?}"))
 }
@@ -172,7 +215,7 @@ pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
 
     let have_pw = creds.password.as_ref().is_some_and(|p| !p.is_empty());
     let have_user = creds.username.as_ref().is_some_and(|u| !u.is_empty());
-    let sec = pick_security(&types, have_pw, prefer_vencrypt)?;
+    let sec = pick_security_ex(&types, have_pw, have_user, prefer_vencrypt)?;
     if sec == SEC_VNC_AUTH && !have_pw {
         return Err(helmhost_core::NEED_PASSWORD.to_string());
     }
@@ -190,6 +233,25 @@ pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
                 name: String::new(),
             },
             Some(SEC_VENCRYPT),
+        ));
+    }
+
+    // Type 129 is both Unix Login and RA256 — only continue as RSA-AES when
+    // pick_security_ex treated it as RA (RA family present or no username).
+    let has_ra_other = types
+        .iter()
+        .any(|&t| t == SEC_RA2 || t == SEC_RA2NE || t == SEC_RANE256);
+    let is_rsa_aes = matches!(sec, SEC_RA2 | SEC_RA2NE | SEC_RANE256)
+        || (sec == SEC_RA256 && (has_ra_other || !have_user));
+    if is_rsa_aes {
+        return Ok((
+            ServerInit {
+                width: 0,
+                height: 0,
+                pixel_format: PixelFormat::rgb888_le(),
+                name: String::new(),
+            },
+            Some(sec),
         ));
     }
 

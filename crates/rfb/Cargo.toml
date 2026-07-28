@@ -16,6 +16,14 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "0.26"
 tracing = "0.1"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+rsa = { version = "0.9", default-features = false, features = ["std", "u64_digit"] }
+sha1 = { version = "0.10", default-features = false, features = ["std"] }
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+aes = "0.8"
+eax = "0.5"
+rand = "0.8"
+num-bigint = { version = "0.8", package = "num-bigint-dig", features = ["rand"] }
+digest = "0.10"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }

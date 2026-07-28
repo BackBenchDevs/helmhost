@@ -12,7 +12,8 @@ use crate::encoding::{
 };
 use crate::handshake::{
     finish_client_server_init, handshake_security_and_init, parse_security_result,
-    vnc_auth_exchange, ServerInit, SEC_NONE, SEC_VENCRYPT, SEC_VNC_AUTH,
+    unix_login_exchange, vnc_auth_exchange, ServerInit, SEC_NONE, SEC_RA2, SEC_RA256, SEC_RA2NE,
+    SEC_RANE256, SEC_VENCRYPT, SEC_VNC_AUTH,
 };
 use crate::io::{read_exact, write_all};
 use crate::messages::{
@@ -24,9 +25,12 @@ use crate::messages::{
     MSG_END_OF_CONTINUOUS_UPDATES, MSG_FRAMEBUFFER_UPDATE, MSG_SERVER_CUT_TEXT, MSG_SET_COLOUR_MAP,
 };
 use crate::pixel_format::PixelFormat;
+use crate::rsa_aes::{rsa_aes_authenticate, AesEaxIo, RsaAesParams};
 use crate::tight::{read_and_decode_tight, TightStream};
 use crate::vencrypt::{
-    negotiate_vencrypt_subtype, wrap_tcp_tls, TlsOptions, VENCRYPT_TLSNONE, VENCRYPT_TLSVNC,
+    negotiate_vencrypt_subtype, vencrypt_subtype_needs_tls, wrap_tcp_tls, TlsOptions,
+    VENCRYPT_PLAIN, VENCRYPT_TLSPLAIN, VENCRYPT_TLSNONE, VENCRYPT_TLSVNC, VENCRYPT_X509NONE,
+    VENCRYPT_X509PLAIN, VENCRYPT_X509VNC,
 };
 use crate::zrle::{decode_zrle_with, ZrleStream};
 use helmhost_core::{
@@ -163,14 +167,40 @@ pub async fn connect_stream(
     prefer_vencrypt: bool,
     encodings: &[i32],
 ) -> Result<SessionHandle, String> {
-    let (init, vencrypt) =
+    let (init, special) =
         handshake_security_and_init(&mut stream, &creds, prefer_vencrypt).await?;
 
-    if vencrypt == Some(SEC_VENCRYPT) {
+    if special == Some(SEC_VENCRYPT) {
         return connect_vencrypt(id, stream, host, creds, tls, encodings).await;
+    }
+    if let Some(sec) = special {
+        if matches!(sec, SEC_RA2 | SEC_RA2NE | SEC_RA256 | SEC_RANE256) {
+            return connect_rsa_aes(id, stream, creds, sec, encodings).await;
+        }
     }
 
     spawn_session_tasks(id, stream, init, encodings).await
+}
+
+async fn connect_rsa_aes(
+    id: SessionId,
+    mut stream: TcpStream,
+    creds: Creds,
+    sec: u8,
+    encodings: &[i32],
+) -> Result<SessionHandle, String> {
+    let params = RsaAesParams::for_sec_type(sec)
+        .ok_or_else(|| format!("internal: not an RSA-AES type {sec}"))?;
+    let keys = rsa_aes_authenticate(&mut stream, &creds, params).await?;
+    // SecurityResult is not used after RSA-AES credentials (TigerVNC goes to ClientInit).
+    if let Some(keys) = keys {
+        let mut wrapped = AesEaxIo::new(stream, keys);
+        let init = finish_client_server_init(&mut wrapped).await?;
+        spawn_session_tasks(id, wrapped, init, encodings).await
+    } else {
+        let init = finish_client_server_init(&mut stream).await?;
+        spawn_session_tasks(id, stream, init, encodings).await
+    }
 }
 
 async fn connect_vencrypt(
@@ -182,17 +212,67 @@ async fn connect_vencrypt(
     encodings: &[i32],
 ) -> Result<SessionHandle, String> {
     let have_pw = creds.password.as_ref().is_some_and(|p| !p.is_empty());
-    let subtype = negotiate_vencrypt_subtype(&mut stream, have_pw).await?;
-    let mut tls_stream = wrap_tcp_tls(stream, host, &tls).await?;
+    let have_user = creds.username.as_ref().is_some_and(|u| !u.is_empty());
+    let subtype = negotiate_vencrypt_subtype(&mut stream, have_user, have_pw).await?;
 
+    if !vencrypt_subtype_needs_tls(subtype) {
+        // Plain (256) or classic subtypes advertised under VeNCrypt — cleartext auth.
+        match subtype {
+            VENCRYPT_PLAIN => {
+                let user = creds
+                    .username
+                    .as_deref()
+                    .filter(|u| !u.is_empty())
+                    .ok_or_else(|| helmhost_core::NEED_USERNAME_PASSWORD.to_string())?;
+                let pw = creds
+                    .password
+                    .as_deref()
+                    .filter(|p| !p.is_empty())
+                    .ok_or_else(|| helmhost_core::NEED_USERNAME_PASSWORD.to_string())?;
+                unix_login_exchange(&mut stream, user, pw).await?;
+                let result = read_exact(&mut stream, 4).await?;
+                parse_security_result(&result)?;
+            }
+            other if other == u32::from(SEC_NONE) => {}
+            other if other == u32::from(SEC_VNC_AUTH) => {
+                let pw = creds
+                    .password
+                    .as_deref()
+                    .ok_or_else(|| helmhost_core::NEED_PASSWORD.to_string())?;
+                vnc_auth_exchange(&mut stream, pw).await?;
+                let result = read_exact(&mut stream, 4).await?;
+                parse_security_result(&result)?;
+            }
+            other => return Err(format!("unsupported VeNCrypt subtype {other}")),
+        }
+        let init = finish_client_server_init(&mut stream).await?;
+        return spawn_session_tasks(id, stream, init, encodings).await;
+    }
+
+    let mut tls_stream = wrap_tcp_tls(stream, host, &tls, subtype).await?;
     match subtype {
-        VENCRYPT_TLSNONE => {}
-        VENCRYPT_TLSVNC => {
+        VENCRYPT_TLSNONE | VENCRYPT_X509NONE => {}
+        VENCRYPT_TLSVNC | VENCRYPT_X509VNC => {
             let pw = creds
                 .password
                 .as_deref()
                 .ok_or_else(|| helmhost_core::NEED_PASSWORD.to_string())?;
             vnc_auth_exchange(&mut tls_stream, pw).await?;
+            let result = read_exact(&mut tls_stream, 4).await?;
+            parse_security_result(&result)?;
+        }
+        VENCRYPT_TLSPLAIN | VENCRYPT_X509PLAIN => {
+            let user = creds
+                .username
+                .as_deref()
+                .filter(|u| !u.is_empty())
+                .ok_or_else(|| helmhost_core::NEED_USERNAME_PASSWORD.to_string())?;
+            let pw = creds
+                .password
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| helmhost_core::NEED_USERNAME_PASSWORD.to_string())?;
+            unix_login_exchange(&mut tls_stream, user, pw).await?;
             let result = read_exact(&mut tls_stream, 4).await?;
             parse_security_result(&result)?;
         }
@@ -223,9 +303,9 @@ pub async fn connect_any<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let (init, vencrypt) = handshake_security_and_init(&mut stream, creds, false).await?;
-    if vencrypt.is_some() {
-        return Err("VeNCrypt requires TCP path".into());
+    let (init, special) = handshake_security_and_init(&mut stream, creds, false).await?;
+    if special.is_some() {
+        return Err("VeNCrypt/RSA-AES require TCP connect path".into());
     }
     spawn_session_tasks(id, stream, init, encodings).await
 }

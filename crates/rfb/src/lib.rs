@@ -11,6 +11,7 @@ pub mod handshake;
 pub mod io;
 pub mod messages;
 pub mod pixel_format;
+pub mod rsa_aes;
 pub mod session;
 pub mod tight;
 pub mod vencrypt;

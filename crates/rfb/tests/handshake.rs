@@ -26,9 +26,48 @@ fn security_types_and_pick() {
 }
 
 #[test]
-fn pick_unix_login_when_only_option() {
+fn pick_vencrypt_only_even_without_prefer() {
+    use helmhost_rfb::handshake::SEC_VENCRYPT;
+    let types = vec![SEC_VENCRYPT, SEC_VENCRYPT];
+    assert_eq!(pick_security(&types, false, false).unwrap(), SEC_VENCRYPT);
+}
+
+#[test]
+fn pick_129_alone_with_user_is_unix_login() {
+    use helmhost_rfb::handshake::pick_security_ex;
     let types = vec![SEC_UNIX_LOGIN];
-    assert_eq!(pick_security(&types, false, false).unwrap(), SEC_UNIX_LOGIN);
+    assert_eq!(
+        pick_security_ex(&types, true, true, false).unwrap(),
+        SEC_UNIX_LOGIN
+    );
+}
+
+#[test]
+fn pick_129_alone_without_user_is_ra256() {
+    use helmhost_rfb::handshake::{pick_security_ex, SEC_RA256};
+    let types = vec![129];
+    assert_eq!(
+        pick_security_ex(&types, true, false, false).unwrap(),
+        SEC_RA256
+    );
+}
+
+#[test]
+fn pick_ra_family_prefers_rane256() {
+    use helmhost_rfb::handshake::{pick_security_ex, SEC_RA2, SEC_RANE256};
+    let types = vec![SEC_RA2, SEC_RANE256];
+    assert_eq!(
+        pick_security_ex(&types, true, false, false).unwrap(),
+        SEC_RANE256
+    );
+}
+
+#[test]
+fn pick_classic_when_both_and_prefer_off() {
+    use helmhost_rfb::handshake::SEC_VENCRYPT;
+    let types = vec![SEC_NONE, SEC_VENCRYPT];
+    assert_eq!(pick_security(&types, false, false).unwrap(), SEC_NONE);
+    assert_eq!(pick_security(&types, false, true).unwrap(), SEC_VENCRYPT);
 }
 
 #[test]
