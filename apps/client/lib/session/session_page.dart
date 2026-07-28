@@ -20,9 +20,11 @@ import '../storage/credential_store.dart';
 import '../thumbs.dart';
 import '../ui/app_about.dart';
 import 'buffering_overlay.dart';
+import 'clipboard_sync.dart';
 import 'credentials.dart';
 import 'fb_texture.dart';
 import 'paint_helpers.dart';
+import 'remote_cursor.dart';
 import 'session_ipc.dart';
 import 'session_link_stats.dart';
 import 'session_overview.dart';
@@ -121,6 +123,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   Timer? _pointerFlushTimer;
   bool _exclusiveGrabActive = false;
   final _exclusiveGrab = ExclusiveGrab();
+  late final ClipboardSync _clipboardSync;
+  bool _windowFocused = true;
   /// Right Cmd/Ctrl was pressed with no other keys — candidate for release.
   bool _releaseChordArmed = false;
   bool _hubNotifiedEnd = false;
@@ -168,6 +172,18 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _qualityLevel = widget.qualityLevel;
     _compressLevel = widget.compressLevel;
     _bridge = widget.bridge ?? HelmBridge.open();
+    _clipboardSync = ClipboardSync(
+      sendToRemote: (text) {
+        try {
+          _bridge.sendClipboard(_sessionId, text);
+        } catch (e) {
+          widget.logger.warn('clipboard sync send failed', {
+            'sessionId': _sessionId,
+            'error': '$e',
+          });
+        }
+      },
+    );
     try {
       _coreVersion = _bridge.coreVersion();
     } catch (_) {
@@ -228,6 +244,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     }
     _ensureTimers();
     _armFirstFrameTimeout();
+    _updateClipboardSync();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && widget.active) {
         _focusNode.requestFocus();
@@ -259,6 +276,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _resizeDebounce?.cancel();
     _pointerFlushTimer?.cancel();
     _pointerFlushTimer = null;
+    _clipboardSync.stop();
     if (_grabbed) {
       _setGrabbed(false);
     } else {
@@ -546,19 +564,24 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   @override
   void onWindowBlur() {
     if (!mounted) return;
+    _windowFocused = false;
     if (_grabbed) _setGrabbed(false);
+    _updateClipboardSync();
   }
 
   @override
   void onWindowFocus() {
     // Do not auto-regrab — exclusive grab only via Grab button or FB click.
     if (!mounted || !widget.active) return;
+    _windowFocused = true;
     if (_grabbed) _focusNode.requestFocus();
+    _updateClipboardSync();
   }
 
   @override
   void dispose() {
     _disposing = true;
+    _clipboardSync.stop();
     _pointerFlushTimer?.cancel();
     unawaited(_stopExclusiveGrab());
     if (widget.closeOnExit) {
@@ -579,6 +602,8 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     }
     _focusNode.dispose();
     _frame?.dispose();
+    _remoteCursorImage?.dispose();
+    _remoteCursorImage = null;
     super.dispose();
   }
 
@@ -602,6 +627,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         onReleaseChord: () {
           if (mounted && _grabbed) _setGrabbed(false);
         },
+        onLocalShortcut: _onExclusiveLocalShortcut,
       );
       _exclusiveGrabActive = true;
     } catch (e) {
@@ -618,19 +644,24 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     } catch (_) {}
   }
 
-  void _onExclusiveKeysym(int keysym, bool down) {
+  void _onExclusiveLocalShortcut(String kind) {
+    if (!mounted || !_grabbed) return;
+    if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
+    if (kind == 'paste') {
+      unawaited(_pasteToRemote());
+    }
+  }
+
+  /// Exclusive grab keys — track by [physical] so release matches press keysym.
+  void _onExclusiveKeysym(int keysym, bool down, int physical) {
     if (!mounted || !_grabbed || _connState != SessionConnState.live) return;
     if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
-    // Track by keysym for exclusive path (no physical key id).
-    final track = keysym;
+    final track = physical;
     if (!down) {
-      if (!_downKeysyms.containsKey(track) &&
-          !_downKeysyms.values.contains(keysym)) {
-        // Still send up in case we missed down tracking.
-      }
-      _downKeysyms.removeWhere((_, v) => v == keysym);
+      final sym = _downKeysyms.remove(track);
+      if (sym == null) return;
       try {
-        _bridge.sendKey(_sessionId, false, keysym);
+        _bridge.sendKey(_sessionId, false, sym);
       } catch (_) {}
       return;
     }
@@ -663,6 +694,21 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _grabbed = grab;
     // dispose → softDispose calls us while the element is already unmounting.
     if (!_disposing && mounted) setState(() {});
+    _updateClipboardSync();
+  }
+
+  void _updateClipboardSync() {
+    final allow = mounted &&
+        !_disposing &&
+        widget.active &&
+        !widget.viewOnly &&
+        _connState == SessionConnState.live &&
+        (_grabbed || _windowFocused);
+    if (allow) {
+      _clipboardSync.start();
+    } else {
+      _clipboardSync.stop();
+    }
   }
 
   Future<void> _setScaleMode(ViewScaleMode m) async {
@@ -710,6 +756,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   }
 
   Future<void> _onClipboard(String text) async {
+    _clipboardSync.noteServerText(text);
     await Clipboard.setData(ClipboardData(text: text));
   }
 
@@ -718,10 +765,21 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
-    if (text == null || text.isEmpty) return;
+    if (text == null || text.isEmpty) {
+      widget.logger.debug('paste to remote: host clipboard empty', {
+        'sessionId': _sessionId,
+      });
+      return;
+    }
     try {
       _bridge.sendClipboard(_sessionId, text);
-    } catch (_) {}
+      _clipboardSync.noteSent(text);
+    } catch (e) {
+      widget.logger.warn('paste to remote failed', {
+        'sessionId': _sessionId,
+        'error': '$e',
+      });
+    }
   }
 
   void _markDirty([DamageRect? rect]) {
@@ -745,6 +803,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         _reconnectAttempt = 0;
       });
     }
+    _updateClipboardSync();
   }
 
   void _schedulePaint() {
@@ -897,6 +956,10 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
           _onBell();
         } else if (type == 'clipboard') {
           unawaited(_onClipboard(ev['text'] as String? ?? ''));
+        } else if (type == 'cursor_changed') {
+          unawaited(_onCursorChanged(ev));
+        } else if (type == 'cursor_position') {
+          // Server warp — soft-cursor pose is local; ignore for now.
         } else if (type == 'disconnected' || type == 'error') {
           final msg = type == 'error'
               ? (ev['message'] as String? ?? ev.toString())
@@ -922,6 +985,43 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     }
   }
 
+  Future<void> _onCursorChanged(Map<String, dynamic> ev) async {
+    final shape = RemoteCursorShape.fromPollEvent(ev);
+    if (shape == null) return;
+    final gen = ++_cursorGen;
+    if (shape.isEmpty) {
+      _remoteCursorImage?.dispose();
+      if (!mounted) return;
+      setState(() {
+        _remoteCursorImage = null;
+        _hasCursorShape = true;
+        _cursorHidden = true;
+      });
+      return;
+    }
+    final img = await decodeCursorImage(shape);
+    if (!mounted || gen != _cursorGen) {
+      img?.dispose();
+      return;
+    }
+    _remoteCursorImage?.dispose();
+    setState(() {
+      _remoteCursorImage = img;
+      _cursorHotX = shape.hotspotX;
+      _cursorHotY = shape.hotspotY;
+      _hasCursorShape = true;
+      _cursorHidden = false;
+    });
+  }
+
+  MouseCursor get _sessionMouseCursor {
+    if (!_grabbed) return SystemMouseCursors.basic;
+    // Until first remote shape: keep OS default (not none).
+    if (!_hasCursorShape) return SystemMouseCursors.basic;
+    // Shape installed (or explicitly empty) — hide OS cursor; soft overlay draws.
+    return SystemMouseCursors.none;
+  }
+
   void _stopPollingForStale() {
     _pollStoppedForStale = true;
     _pollTimer?.cancel();
@@ -932,6 +1032,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     _statsUiTimer = null;
     _firstFrameTimer?.cancel();
     _firstFrameTimer = null;
+    _clipboardSync.stop();
   }
 
   Future<void> _handleDisconnect(String msg) async {
@@ -959,6 +1060,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       _connState = SessionConnState.disconnected;
       _lastError = unknown ? 'Session ended' : msg;
     });
+    _updateClipboardSync();
     final auto = shouldAutoReconnect(
       prefEnabled: widget.prefs?.autoReconnectOnDrop ?? false,
       embedded: _embedded,
@@ -1243,6 +1345,15 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   double _scrollAccX = 0;
   double _scrollAccY = 0;
   Offset? _lastPointerGlobal;
+  /// Local pointer in view coords (for soft-cursor overlay).
+  Offset? _localPointer;
+  ui.Image? _remoteCursorImage;
+  int _cursorHotX = 0;
+  int _cursorHotY = 0;
+  /// False until first cursor shape; empty shape hides overlay.
+  bool _hasCursorShape = false;
+  bool _cursorHidden = false;
+  int _cursorGen = 0;
 
   void _onPointer(Offset global, int buttons) {
     // Click into framebuffer re-grabs after release / focus loss.
@@ -1255,6 +1366,16 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     if (!_grabbed || _connState != SessionConnState.live) return;
     if (!sessionAllowsRemoteInput(viewOnly: widget.viewOnly)) return;
     _lastPointerGlobal = global;
+    final box = _viewKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null) {
+      final local = box.globalToLocal(global);
+      if (_localPointer != local) {
+        _localPointer = local;
+        if (_grabbed && _remoteCursorImage != null && !_cursorHidden) {
+          setState(() {});
+        }
+      }
+    }
     // Focus only on press/drag, not every hover sample.
     if (buttons != 0) {
       _focusNode.requestFocus();
@@ -1510,7 +1631,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         autofocus: true,
         onKeyEvent: _onKey,
         child: MouseRegion(
-          cursor: _grabbed ? SystemMouseCursors.none : SystemMouseCursors.basic,
+          cursor: _sessionMouseCursor,
           child: Listener(
             onPointerDown: (e) => _onPointer(e.position, e.buttons),
             onPointerMove: (e) => _onPointer(e.position, e.buttons),
@@ -1527,9 +1648,30 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       _onViewSize(Size(constraints.maxWidth, constraints.maxHeight));
                     });
-                    return KeyedSubtree(
-                      key: _viewKey,
-                      child: _frameChild(),
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        KeyedSubtree(
+                          key: _viewKey,
+                          child: _frameChild(),
+                        ),
+                        if (_grabbed &&
+                            _remoteCursorImage != null &&
+                            !_cursorHidden &&
+                            _localPointer != null)
+                          Positioned(
+                            left: _localPointer!.dx - _cursorHotX,
+                            top: _localPointer!.dy - _cursorHotY,
+                            child: IgnorePointer(
+                              child: RawImage(
+                                image: _remoteCursorImage,
+                                width: _remoteCursorImage!.width.toDouble(),
+                                height: _remoteCursorImage!.height.toDouble(),
+                                filterQuality: FilterQuality.none,
+                              ),
+                            ),
+                          ),
+                      ],
                     );
                   },
                 ),

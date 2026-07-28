@@ -15,6 +15,12 @@ pub const ENC_XCURSOR: i32 = -240;
 pub const ENC_EXTENDED_DESKTOP_SIZE: i32 = -308;
 /// TigerVNC Continuous Updates capability (pseudo-encoding).
 pub const ENC_CONTINUOUS_UPDATES: i32 = -313;
+/// Cursor with alpha channel (TigerVNC).
+pub const ENC_CURSOR_WITH_ALPHA: i32 = -314;
+/// VMware cursor pseudo-encoding.
+pub const ENC_VMWARE_CURSOR: i32 = 0x574d_5664; // 'WMVd'
+/// VMware cursor position (server→client warp).
+pub const ENC_VMWARE_CURSOR_POSITION: i32 = 0x574d_5666; // 'WMVf'
 
 /// Tight quality pseudo-encoding range: -32 (lowest) .. -23 (highest).
 const TIGHT_QUALITY_BASE: i32 = -32;
@@ -40,10 +46,10 @@ pub fn preferred_encodings() -> Vec<i32> {
 
 /// Advertised encodings for a given bandwidth profile.
 ///
-/// - `Lan` / `Balanced`: Tight, ZRLE, Raw, CopyRect, DesktopSize, ExtDesktopSize, LastRect, CU
-/// - `Low`: Tight, ZRLE, CopyRect, DesktopSize, ExtDesktopSize, LastRect, CU (no Raw)
+/// Includes local-cursor encodings (TigerVNC order: CursorWithAlpha, VMware,
+/// Cursor, XCursor, VMwareCursorPosition) after the pixel encodings.
 pub fn preferred_encodings_for(preset: BandwidthPreset) -> Vec<i32> {
-    match preset {
+    let mut encs = match preset {
         BandwidthPreset::Lan | BandwidthPreset::Balanced => vec![
             ENC_TIGHT,
             ENC_ZRLE,
@@ -63,7 +69,15 @@ pub fn preferred_encodings_for(preset: BandwidthPreset) -> Vec<i32> {
             ENC_LAST_RECT,
             ENC_CONTINUOUS_UPDATES,
         ],
-    }
+    };
+    encs.extend_from_slice(&[
+        ENC_CURSOR_WITH_ALPHA,
+        ENC_VMWARE_CURSOR,
+        ENC_CURSOR,
+        ENC_XCURSOR,
+        ENC_VMWARE_CURSOR_POSITION,
+    ]);
+    encs
 }
 
 /// Tight quality pseudo-encoding for the given level (0 = lowest, 9 = highest).
@@ -119,6 +133,9 @@ pub fn encoding_name(enc: i32) -> &'static str {
         ENC_LAST_RECT => "LastRect",
         ENC_CURSOR => "Cursor",
         ENC_XCURSOR => "XCursor",
+        ENC_CURSOR_WITH_ALPHA => "CursorWithAlpha",
+        ENC_VMWARE_CURSOR => "VMwareCursor",
+        ENC_VMWARE_CURSOR_POSITION => "VMwareCursorPosition",
         ENC_EXTENDED_DESKTOP_SIZE => "ExtendedDesktopSize",
         ENC_CONTINUOUS_UPDATES => "ContinuousUpdates",
         _ => "unknown",
@@ -137,6 +154,9 @@ mod tests {
         assert!(e.contains(&ENC_RAW));
         assert!(e.contains(&ENC_CONTINUOUS_UPDATES));
         assert!(e.contains(&ENC_LAST_RECT));
+        assert!(e.contains(&ENC_CURSOR_WITH_ALPHA));
+        assert!(e.contains(&ENC_CURSOR));
+        assert!(e.contains(&ENC_XCURSOR));
     }
 
     #[test]

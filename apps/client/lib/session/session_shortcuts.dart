@@ -13,20 +13,21 @@ enum SessionLocalShortcut {
 
 /// Classify a key-down as a local viewer shortcut, or null to forward RFB.
 ///
-/// When [exclusiveGrab] is true, all chords forward to the remote (status-bar
-/// Paste covers clipboard); only the native release chord is local.
+/// Local chords apply even under exclusive grab (TigerVNC): status-bar Paste is
+/// not the only host→remote path. Native grab reports the same chords via
+/// `localShortcut`; this classifier is used by the Flutter key path.
 ///
-/// Matches TigerVNC / RuVNC conventions when not exclusive:
 /// - **⌘V** (Meta+V): paste local → remote
-/// - **Shift+Insert**: paste local → remote (X11)
-/// - **⌘C / ⌘X**: consume locally (do not send); remote copy is Ctrl(+Shift)+C
-///   on the remote OS, synced via ServerCutText
+/// - **Shift+Insert**: paste local → remote (X11 / Windows)
+/// - **Ctrl+Alt+V**: paste local → remote (Windows viewer chord; not bare Ctrl+V)
+/// - **⌘C / ⌘X**: consume locally (do not send)
 /// - **Ctrl+C / Ctrl+V / Ctrl+Shift+C**: always forward to remote
 bool isSessionLocalShortcut({
   required LogicalKeyboardKey key,
   required bool shift,
   required bool control,
   required bool meta,
+  bool alt = false,
   bool exclusiveGrab = false,
 }) =>
     classifySessionLocalShortcut(
@@ -34,6 +35,7 @@ bool isSessionLocalShortcut({
       shift: shift,
       control: control,
       meta: meta,
+      alt: alt,
       exclusiveGrab: exclusiveGrab,
     ) !=
     null;
@@ -43,11 +45,19 @@ SessionLocalShortcut? classifySessionLocalShortcut({
   required bool shift,
   required bool control,
   required bool meta,
+  bool alt = false,
   bool exclusiveGrab = false,
 }) {
-  if (exclusiveGrab) return null;
+  // [exclusiveGrab] kept for API compat; local paste/consume still apply.
+  // ignore: unused_parameter
+  exclusiveGrab;
 
-  // Never steal Control chords — those are for the remote (terminals, etc.).
+  // Ctrl+Alt+V — viewer paste (Windows); not bare Control chords.
+  if (control && alt && !meta && !shift && key == LogicalKeyboardKey.keyV) {
+    return SessionLocalShortcut.pasteToRemote;
+  }
+
+  // Never steal bare Control chords — those are for the remote (terminals, etc.).
   if (control && !meta) return null;
 
   if (meta && key == LogicalKeyboardKey.keyV) {
@@ -77,11 +87,15 @@ SessionLocalShortcut? classifySessionLocalKeyEvent(
       keys.contains(LogicalKeyboardKey.metaRight) ||
       keys.contains(LogicalKeyboardKey.meta) ||
       keys.contains(LogicalKeyboardKey.superKey);
+  final alt = keys.contains(LogicalKeyboardKey.altLeft) ||
+      keys.contains(LogicalKeyboardKey.altRight) ||
+      keys.contains(LogicalKeyboardKey.alt);
   return classifySessionLocalShortcut(
     key: event.logicalKey,
     shift: shift,
     control: control,
     meta: meta,
+    alt: alt,
     exclusiveGrab: exclusiveGrab,
   );
 }
@@ -92,12 +106,14 @@ bool isPasteToRemoteShortcut({
   required bool shift,
   required bool control,
   required bool meta,
+  bool alt = false,
 }) =>
     classifySessionLocalShortcut(
       key: key,
       shift: shift,
       control: control,
       meta: meta,
+      alt: alt,
     ) ==
     SessionLocalShortcut.pasteToRemote;
 

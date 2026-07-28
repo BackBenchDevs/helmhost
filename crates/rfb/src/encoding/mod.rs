@@ -9,8 +9,9 @@ pub use bounds::rect_fits_framebuffer;
 pub use constants::{
     compress_level_encoding, encoding_name, encodings_with_quality_compress, preferred_encodings,
     preferred_encodings_for, quality_level_encoding, BandwidthPreset, ENC_CONTINUOUS_UPDATES,
-    ENC_COPYRECT, ENC_CURSOR, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE, ENC_HEXTILE, ENC_JPEG,
-    ENC_LAST_RECT, ENC_RAW, ENC_RRE, ENC_TIGHT, ENC_TRLE, ENC_XCURSOR, ENC_ZRLE,
+    ENC_COPYRECT, ENC_CURSOR, ENC_CURSOR_WITH_ALPHA, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE,
+    ENC_HEXTILE, ENC_JPEG, ENC_LAST_RECT, ENC_RAW, ENC_RRE, ENC_TIGHT, ENC_TRLE,
+    ENC_VMWARE_CURSOR, ENC_VMWARE_CURSOR_POSITION, ENC_XCURSOR, ENC_ZRLE,
 };
 
 /// How to continue after handling one framebuffer rectangle.

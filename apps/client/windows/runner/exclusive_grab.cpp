@@ -8,6 +8,12 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 
 namespace {
 
@@ -35,6 +41,7 @@ constexpr uint32_t kXkLeft = 0xff51;
 constexpr uint32_t kXkUp = 0xff52;
 constexpr uint32_t kXkRight = 0xff53;
 constexpr uint32_t kXkDown = 0xff54;
+constexpr uint32_t kXkInsert = 0xff63;
 
 std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> g_channel;
 HWND g_hwnd = nullptr;
@@ -42,6 +49,8 @@ HHOOK g_hook = nullptr;
 std::atomic<bool> g_active{false};
 std::atomic<bool> g_release_armed{false};
 std::mutex g_mu;
+// vk → keysym of last press (ToUnicodeEx often returns 0 on key-up).
+std::unordered_map<DWORD, uint32_t> g_down_keysyms;
 
 bool IsRightControl(const KBDLLHOOKSTRUCT* info) {
   return info->vkCode == VK_RCONTROL ||
@@ -53,16 +62,17 @@ bool IsLeftControl(const KBDLLHOOKSTRUCT* info) {
          (info->vkCode == VK_CONTROL && !(info->flags & LLKHF_EXTENDED));
 }
 
-uint32_t VkToKeysym(const KBDLLHOOKSTRUCT* info) {
+uint32_t UcsToKeysym(uint32_t u) {
+  if (u >= 0x20 && u <= 0x7e) return u;
+  if (u >= 0xa0 && u <= 0xff) return u;
+  return 0x01000000u | u;
+}
+
+/// Non-printable / modifier map (TigerVNC vkey_map style).
+uint32_t SpecialVkToKeysym(const KBDLLHOOKSTRUCT* info) {
   const DWORD vk = info->vkCode;
   if (IsRightControl(info)) return kXkControlR;
   if (IsLeftControl(info)) return kXkControlL;
-  if (vk >= 'A' && vk <= 'Z') {
-    return static_cast<uint32_t>(vk - 'A' + 0x61);
-  }
-  if (vk >= '0' && vk <= '9') {
-    return static_cast<uint32_t>(vk);
-  }
   switch (vk) {
     case VK_LSHIFT:
     case VK_SHIFT:
@@ -107,6 +117,8 @@ uint32_t VkToKeysym(const KBDLLHOOKSTRUCT* info) {
       return kXkRight;
     case VK_DOWN:
       return kXkDown;
+    case VK_INSERT:
+      return kXkInsert;
     case VK_F1:
       return 0xffbe;
     case VK_F2:
@@ -131,33 +143,36 @@ uint32_t VkToKeysym(const KBDLLHOOKSTRUCT* info) {
       return 0xffc8;
     case VK_F12:
       return 0xffc9;
-    case VK_OEM_1:
-      return 0x003b;
-    case VK_OEM_PLUS:
-      return 0x003d;
-    case VK_OEM_COMMA:
-      return 0x002c;
-    case VK_OEM_MINUS:
-      return 0x002d;
-    case VK_OEM_PERIOD:
-      return 0x002e;
-    case VK_OEM_2:
-      return 0x002f;
-    case VK_OEM_3:
-      return 0x0060;
-    case VK_OEM_4:
-      return 0x005b;
-    case VK_OEM_5:
-      return 0x005c;
-    case VK_OEM_6:
-      return 0x005d;
-    case VK_OEM_7:
-      return 0x0027;
-    case VK_INSERT:
-      return 0xff63;
     default:
       return 0;
   }
+}
+
+uint32_t ResolveKeysym(const KBDLLHOOKSTRUCT* info) {
+  if (const uint32_t special = SpecialVkToKeysym(info)) {
+    return special;
+  }
+  BYTE state[256];
+  if (!GetKeyboardState(state)) {
+    return 0;
+  }
+  // Clear Ctrl so Ctrl+letter yields the letter, not a control code.
+  state[VK_CONTROL] = 0;
+  state[VK_LCONTROL] = 0;
+  state[VK_RCONTROL] = 0;
+  WCHAR buf[4] = {};
+  const HKL hkl = GetKeyboardLayout(0);
+  const UINT scan = MapVirtualKeyExW(info->vkCode, MAPVK_VK_TO_VSC, hkl);
+  const int n =
+      ToUnicodeEx(info->vkCode, scan, state, buf, 4, 0, hkl);
+  if (n > 0) {
+    const uint32_t u = static_cast<uint32_t>(buf[0]);
+    if (u >= 0x20 && !(u >= 0x7f && u < 0xa0)) {
+      return UcsToKeysym(u);
+    }
+  }
+  // Dead-key / no mapping: do not invent a US fallback — pass through to host.
+  return 0;
 }
 
 void PostToUi(std::function<void()> fn) {
@@ -171,7 +186,7 @@ void PostToUi(std::function<void()> fn) {
   }
 }
 
-void EmitKey(uint32_t keysym, bool down) {
+void EmitKey(uint32_t keysym, bool down, uint32_t physical) {
   if (!g_channel || keysym == 0) {
     return;
   }
@@ -179,6 +194,8 @@ void EmitKey(uint32_t keysym, bool down) {
   args[flutter::EncodableValue("keysym")] =
       flutter::EncodableValue(static_cast<int32_t>(keysym));
   args[flutter::EncodableValue("down")] = flutter::EncodableValue(down);
+  args[flutter::EncodableValue("physical")] =
+      flutter::EncodableValue(static_cast<int32_t>(physical));
   g_channel->InvokeMethod(
       "key", std::make_unique<flutter::EncodableValue>(args));
 }
@@ -188,6 +205,43 @@ void EmitReleaseChord() {
     return;
   }
   g_channel->InvokeMethod("releaseChord", nullptr);
+}
+
+void EmitLocalShortcut(const char* kind) {
+  if (!g_channel) {
+    return;
+  }
+  flutter::EncodableMap args;
+  args[flutter::EncodableValue("kind")] = flutter::EncodableValue(kind);
+  g_channel->InvokeMethod(
+      "localShortcut", std::make_unique<flutter::EncodableValue>(args));
+}
+
+/// Viewer-local paste/consume under exclusive grab (not bare Control chords).
+const char* LocalShortcutKind(const KBDLLHOOKSTRUCT* info) {
+  const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+  const bool control = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+  const bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+  const bool meta = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
+                    (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+  const DWORD vk = info->vkCode;
+
+  // Ctrl+Alt+V — explicit viewer paste (Win+V is OS clipboard history).
+  if (control && alt && !meta && !shift && (vk == 'V' || vk == 'v')) {
+    return "paste";
+  }
+
+  // Never steal bare Control chords — those are for the remote.
+  if (control && !meta && !alt) {
+    return nullptr;
+  }
+  if (shift && !meta && !control && vk == VK_INSERT) {
+    return "paste";
+  }
+  if (meta && (vk == 'C' || vk == 'c' || vk == 'X' || vk == 'x')) {
+    return "consume";
+  }
+  return nullptr;
 }
 
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
@@ -213,11 +267,39 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     g_release_armed.store(false);
   }
 
-  const uint32_t keysym = VkToKeysym(info);
-  if (keysym != 0) {
-    PostToUi([keysym, down] { EmitKey(keysym, down); });
+  if (down) {
+    if (const char* kind = LocalShortcutKind(info)) {
+      PostToUi([kind] { EmitLocalShortcut(kind); });
+      return 1;
+    }
   }
-  return 1;
+
+  const DWORD vk = info->vkCode;
+  uint32_t keysym = 0;
+  if (down) {
+    keysym = ResolveKeysym(info);
+    if (keysym != 0) {
+      std::lock_guard<std::mutex> lock(g_mu);
+      g_down_keysyms[vk] = keysym;
+    }
+  } else {
+    std::lock_guard<std::mutex> lock(g_mu);
+    const auto it = g_down_keysyms.find(vk);
+    if (it != g_down_keysyms.end()) {
+      keysym = it->second;
+      g_down_keysyms.erase(it);
+    } else {
+      keysym = ResolveKeysym(info);
+    }
+  }
+
+  if (keysym != 0) {
+    const uint32_t physical = vk;
+    PostToUi([keysym, down, physical] { EmitKey(keysym, down, physical); });
+    return 1;
+  }
+  // Unmapped: pass to host so keys are not eaten silently.
+  return CallNextHookEx(g_hook, nCode, wParam, lParam);
 }
 
 void StartHook() {
@@ -231,6 +313,10 @@ void StartHook() {
 
 void StopHook() {
   g_active.store(false);
+  {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_down_keysyms.clear();
+  }
   if (g_hook) {
     UnhookWindowsHookEx(g_hook);
     g_hook = nullptr;

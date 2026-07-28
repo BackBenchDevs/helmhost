@@ -1,8 +1,15 @@
 //! Async RFB session: handshake then reader + writer tasks on command/event queues.
 
+use crate::cursor::{
+    cursor_with_alpha_payload_len, decode_cursor, decode_cursor_with_alpha, decode_vmware_cursor,
+    decode_xcursor,
+};
 use crate::dirty_coalesce::DirtyCoalescer;
 use crate::encoding::ENC_TIGHT;
-use crate::encoding::{encoding_name, rect_fits_framebuffer, RectAction};
+use crate::encoding::{
+    encoding_name, rect_fits_framebuffer, RectAction, ENC_CURSOR, ENC_CURSOR_WITH_ALPHA,
+    ENC_VMWARE_CURSOR, ENC_VMWARE_CURSOR_POSITION, ENC_XCURSOR,
+};
 use crate::handshake::{
     finish_client_server_init, handshake_security_and_init, parse_security_result,
     vnc_auth_exchange, ServerInit, SEC_NONE, SEC_VENCRYPT, SEC_VNC_AUTH,
@@ -641,6 +648,128 @@ async fn handle_rect<R: AsyncRead + Unpin>(
             Ok((RectAction::Continue, None))
         }
         ENC_LAST_RECT => Ok((RectAction::EndFramebufferUpdate, None)),
+        ENC_CURSOR => {
+            let bpp = {
+                let g = state.lock().await;
+                g.pixel_format.bytes_per_pixel()
+            };
+            let mask_len = (((hdr.w as usize) + 7) / 8) * (hdr.h as usize);
+            let nbytes = (hdr.w as usize) * (hdr.h as usize) * bpp + mask_len;
+            let data = if nbytes == 0 {
+                Vec::new()
+            } else {
+                read_exact(rd, nbytes).await?
+            };
+            let pf = {
+                let g = state.lock().await;
+                g.pixel_format
+            };
+            let shape = decode_cursor(&pf, hdr.w, hdr.h, hdr.x, hdr.y, &data)?;
+            send_event(
+                ev_tx,
+                SessionEvent::CursorChanged {
+                    width: shape.width,
+                    height: shape.height,
+                    hotspot_x: shape.hotspot_x,
+                    hotspot_y: shape.hotspot_y,
+                    rgba: shape.rgba,
+                },
+            )
+            .await;
+            Ok((RectAction::Continue, None))
+        }
+        ENC_XCURSOR => {
+            let bitmap_len = (((hdr.w as usize) + 7) / 8) * (hdr.h as usize);
+            let nbytes = if hdr.w == 0 || hdr.h == 0 {
+                0
+            } else {
+                6 + bitmap_len * 2
+            };
+            let data = if nbytes == 0 {
+                Vec::new()
+            } else {
+                read_exact(rd, nbytes).await?
+            };
+            let shape = decode_xcursor(hdr.w, hdr.h, hdr.x, hdr.y, &data)?;
+            send_event(
+                ev_tx,
+                SessionEvent::CursorChanged {
+                    width: shape.width,
+                    height: shape.height,
+                    hotspot_x: shape.hotspot_x,
+                    hotspot_y: shape.hotspot_y,
+                    rgba: shape.rgba,
+                },
+            )
+            .await;
+            Ok((RectAction::Continue, None))
+        }
+        ENC_CURSOR_WITH_ALPHA => {
+            let nbytes = cursor_with_alpha_payload_len(hdr.w, hdr.h);
+            let data = read_exact(rd, nbytes).await?;
+            let shape = decode_cursor_with_alpha(hdr.w, hdr.h, hdr.x, hdr.y, &data)?;
+            send_event(
+                ev_tx,
+                SessionEvent::CursorChanged {
+                    width: shape.width,
+                    height: shape.height,
+                    hotspot_x: shape.hotspot_x,
+                    hotspot_y: shape.hotspot_y,
+                    rgba: shape.rgba,
+                },
+            )
+            .await;
+            Ok((RectAction::Continue, None))
+        }
+        ENC_VMWARE_CURSOR => {
+            let hdr2 = read_exact(rd, 2).await?;
+            let ctype = hdr2[0];
+            let bpp = {
+                let g = state.lock().await;
+                g.pixel_format.bytes_per_pixel()
+            };
+            let body = if hdr.w == 0 || hdr.h == 0 {
+                Vec::new()
+            } else if ctype == 0 {
+                let plane = (hdr.w as usize) * (hdr.h as usize) * bpp;
+                read_exact(rd, plane * 2).await?
+            } else if ctype == 1 {
+                read_exact(rd, (hdr.w as usize) * (hdr.h as usize) * 4).await?
+            } else {
+                return Err(format!("unknown vmware cursor type {ctype}"));
+            };
+            let mut data = Vec::with_capacity(2 + body.len());
+            data.extend_from_slice(&hdr2);
+            data.extend_from_slice(&body);
+            let pf = {
+                let g = state.lock().await;
+                g.pixel_format
+            };
+            let shape = decode_vmware_cursor(&pf, hdr.w, hdr.h, hdr.x, hdr.y, &data)?;
+            send_event(
+                ev_tx,
+                SessionEvent::CursorChanged {
+                    width: shape.width,
+                    height: shape.height,
+                    hotspot_x: shape.hotspot_x,
+                    hotspot_y: shape.hotspot_y,
+                    rgba: shape.rgba,
+                },
+            )
+            .await;
+            Ok((RectAction::Continue, None))
+        }
+        ENC_VMWARE_CURSOR_POSITION => {
+            send_event(
+                ev_tx,
+                SessionEvent::CursorPosition {
+                    x: hdr.x,
+                    y: hdr.y,
+                },
+            )
+            .await;
+            Ok((RectAction::Continue, None))
+        }
         other => {
             if hdr.w == 0 || hdr.h == 0 {
                 Ok((RectAction::Continue, None))

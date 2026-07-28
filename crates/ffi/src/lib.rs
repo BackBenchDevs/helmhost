@@ -86,6 +86,15 @@ enum FfiEvent {
     FramebufferDirty { x: i32, y: i32, w: u32, h: u32 },
     Bell,
     Clipboard { text: String },
+    CursorChanged {
+        w: u32,
+        h: u32,
+        hotspot_x: u32,
+        hotspot_y: u32,
+        /// Base64-encoded non-premultiplied RGBA8 (`w*h*4`); empty when hidden.
+        rgba_b64: String,
+    },
+    CursorPosition { x: u32, y: u32 },
     Disconnected,
     Error { message: String },
     None,
@@ -103,6 +112,23 @@ fn encode_event(ev: Option<SessionEvent>) -> String {
         },
         Some(SessionEvent::Bell) => FfiEvent::Bell,
         Some(SessionEvent::Clipboard(text)) => FfiEvent::Clipboard { text },
+        Some(SessionEvent::CursorChanged {
+            width,
+            height,
+            hotspot_x,
+            hotspot_y,
+            rgba,
+        }) => FfiEvent::CursorChanged {
+            w: u32::from(width),
+            h: u32::from(height),
+            hotspot_x: u32::from(hotspot_x),
+            hotspot_y: u32::from(hotspot_y),
+            rgba_b64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &rgba),
+        },
+        Some(SessionEvent::CursorPosition { x, y }) => FfiEvent::CursorPosition {
+            x: u32::from(x),
+            y: u32::from(y),
+        },
         Some(SessionEvent::Disconnected) => FfiEvent::Disconnected,
         Some(SessionEvent::Error(message)) => FfiEvent::Error { message },
     };
@@ -409,7 +435,9 @@ pub extern "C" fn hh_send_clipboard(session_id: u64, text: *const c_char) -> *mu
     let Ok(s) = cstr_to_string(text) else {
         return err_cstr("bad clipboard text");
     };
-    send_cmd(session_id, SessionCommand::CutText(s))
+    // Clipboard sync is not pointer/key focus-gated (TigerVNC SendClipboard while
+    // the viewer window is active). Keys/pointer still require hh_focus_grab.
+    send_cmd_unfocused(session_id, SessionCommand::CutText(s))
 }
 
 /// Request remote desktop resize (TigerVNC RemoteResize / SetDesktopSize).
@@ -444,29 +472,6 @@ pub extern "C" fn hh_close(session_id: u64) -> *mut c_char {
     }
 }
 
-fn send_cmd(session_id: u64, cmd: SessionCommand) -> *mut c_char {
-    let result = RT.block_on(async {
-        let tx = {
-            let state = STATE.lock().map_err(|_| "lock".to_string())?;
-            if !state.focus.allows(SessionId(session_id)) {
-                return Err("focus not grabbed".to_string());
-            }
-            let Some(handle) = state.sessions.get(&session_id) else {
-                return Err("unknown session".to_string());
-            };
-            handle.commands.clone()
-        };
-        tx.send(cmd)
-            .await
-            .map_err(|_| "session command queue closed".to_string())
-    });
-    match result {
-        Ok(()) => ok_cstr("ok"),
-        Err(e) => err_cstr(e),
-    }
-}
-
-/// Hot-path input: try_send, no block_on, no CString. 0 = ok, -1 = error.
 fn send_cmd_try(session_id: u64, cmd: SessionCommand) -> c_int {
     let Ok(state) = STATE.lock() else {
         return -1;

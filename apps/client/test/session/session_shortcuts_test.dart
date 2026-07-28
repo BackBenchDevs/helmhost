@@ -40,6 +40,19 @@ void main() {
       );
     });
 
+    test('Ctrl+Alt+V is paste (Windows viewer chord)', () {
+      expect(
+        classifySessionLocalShortcut(
+          key: LogicalKeyboardKey.keyV,
+          shift: false,
+          control: true,
+          meta: false,
+          alt: true,
+        ),
+        SessionLocalShortcut.pasteToRemote,
+      );
+    });
+
     test('Meta+C is consume (not interrupt)', () {
       expect(
         classifySessionLocalShortcut(
@@ -100,7 +113,7 @@ void main() {
       );
     });
 
-    test('exclusiveGrab forwards Meta+V and Meta+C', () {
+    test('exclusiveGrab still classifies Meta+V paste and Meta+C consume', () {
       expect(
         classifySessionLocalShortcut(
           key: LogicalKeyboardKey.keyV,
@@ -109,7 +122,7 @@ void main() {
           meta: true,
           exclusiveGrab: true,
         ),
-        isNull,
+        SessionLocalShortcut.pasteToRemote,
       );
       expect(
         classifySessionLocalShortcut(
@@ -119,7 +132,7 @@ void main() {
           meta: true,
           exclusiveGrab: true,
         ),
-        isNull,
+        SessionLocalShortcut.consume,
       );
     });
   });

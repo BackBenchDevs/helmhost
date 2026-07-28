@@ -1,6 +1,9 @@
 //! Framebuffer rectangle bounds (TigerVNC: "Rect too big").
 
-use crate::encoding::constants::{ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT};
+use crate::encoding::constants::{
+    ENC_CURSOR, ENC_CURSOR_WITH_ALPHA, ENC_DESKTOP_SIZE, ENC_EXTENDED_DESKTOP_SIZE, ENC_LAST_RECT,
+    ENC_VMWARE_CURSOR, ENC_VMWARE_CURSOR_POSITION, ENC_XCURSOR,
+};
 use crate::messages::FramebufferRectHeader;
 
 /// Returns true when the encoding uses rect w×h as desktop metrics, not FB damage.
@@ -11,16 +14,27 @@ pub fn is_geometry_pseudo_encoding(enc: i32) -> bool {
     )
 }
 
+/// Cursor pseudo-encodings: x/y are hotspot (or position), not FB coords.
+pub fn is_cursor_pseudo_encoding(enc: i32) -> bool {
+    matches!(
+        enc,
+        ENC_CURSOR
+            | ENC_XCURSOR
+            | ENC_CURSOR_WITH_ALPHA
+            | ENC_VMWARE_CURSOR
+            | ENC_VMWARE_CURSOR_POSITION
+    )
+}
+
 /// Reject damage rectangles that extend past the current framebuffer.
 ///
-/// DesktopSize / LastRect are exempt: their w×h are not a blit region
-/// (TigerVNC `CMsgReader` treats DesktopSize as a resize request).
+/// DesktopSize / LastRect / cursor shapes are exempt.
 pub fn rect_fits_framebuffer(
     fb_w: u16,
     fb_h: u16,
     hdr: &FramebufferRectHeader,
 ) -> Result<(), String> {
-    if is_geometry_pseudo_encoding(hdr.encoding) {
+    if is_geometry_pseudo_encoding(hdr.encoding) || is_cursor_pseudo_encoding(hdr.encoding) {
         return Ok(());
     }
     let x = u32::from(hdr.x);

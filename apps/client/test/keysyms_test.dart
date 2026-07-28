@@ -77,6 +77,16 @@ void main() {
       expect(keysymForKeyEvent(ev), 0x0041);
     });
 
+    test('uses character for Shift+digit bang', () {
+      final ev = KeyDownEvent(
+        physicalKey: PhysicalKeyboardKey.digit1,
+        logicalKey: LogicalKeyboardKey.digit1,
+        character: '!',
+        timeStamp: Duration.zero,
+      );
+      expect(keysymForKeyEvent(ev), 0x0021);
+    });
+
     test('control left from logical table', () {
       final ev = KeyDownEvent(
         physicalKey: PhysicalKeyboardKey.controlLeft,

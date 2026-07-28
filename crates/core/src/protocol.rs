@@ -121,6 +121,17 @@ pub enum SessionEvent {
     },
     Bell,
     Clipboard(String),
+    /// Local cursor shape from Cursor / XCursor / CursorWithAlpha / VMware.
+    /// Empty `rgba` (or w/h == 0) means hide the local cursor.
+    CursorChanged {
+        width: u16,
+        height: u16,
+        hotspot_x: u16,
+        hotspot_y: u16,
+        rgba: Vec<u8>,
+    },
+    /// Server-driven cursor warp (VMwareCursorPosition).
+    CursorPosition { x: u16, y: u16 },
     Disconnected,
     Error(String),
 }
