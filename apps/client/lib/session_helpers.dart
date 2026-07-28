@@ -891,26 +891,11 @@ QuickConnectResult resolveQuickConnect({
             intent: QuickConnectIntent.needGroupPick,
           ),
         );
-      } else if (withDomain.isEmpty) {
-        return QuickConnectResult.ok(
-          QuickConnectTarget(
-            connectHost: host,
-            port: preliminary.port,
-            displayNumber: displayOmitted ? null : preliminary.displayNumber,
-            entryHost: host,
-            intent: QuickConnectIntent.needCreateProfile,
-          ),
-        );
       } else {
-        return QuickConnectResult.ok(
-          QuickConnectTarget(
-            connectHost: host,
-            port: preliminary.port,
-            displayNumber: displayOmitted ? null : preliminary.displayNumber,
-            entryHost: host,
-            intent: QuickConnectIntent.needGroupPick,
-          ),
-        );
+        // FQDN with no domain match — connect ungrouped (no force create/pick).
+        intent = QuickConnectIntent.ready;
+        profileId = null;
+        activeProfile = null;
       }
     }
   } else {

@@ -341,14 +341,27 @@ void main() {
       expect(r.target!.intent, QuickConnectIntent.confirmAddToGroup);
     });
 
-    test('unmatched dotted host needs group pick', () {
+    test('unmatched FQDN connects ungrouped', () {
       final r = resolveQuickConnect(
         rawInput: 'vnc.box',
         profiles: const [lab, work],
       );
       expect(r.error, isNull);
-      expect(r.target!.intent, QuickConnectIntent.needGroupPick);
+      expect(r.target!.intent, QuickConnectIntent.ready);
+      expect(r.target!.profileId, isNull);
       expect(r.target!.connectHost, 'vnc.box');
+    });
+
+    test('unmatched FQDN with no profiles connects ungrouped', () {
+      final r = resolveQuickConnect(
+        rawInput: 'host.example.com:1',
+        profiles: const [],
+      );
+      expect(r.error, isNull);
+      expect(r.target!.intent, QuickConnectIntent.ready);
+      expect(r.target!.profileId, isNull);
+      expect(r.target!.connectHost, 'host.example.com');
+      expect(r.target!.port, 5901);
     });
 
     test('partial domain expands and confirms Add to group', () {

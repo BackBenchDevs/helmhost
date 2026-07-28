@@ -107,16 +107,24 @@ Future<AutoGroupAssignPreview?> showAutoGroupAssignConfirm(
 
 /// Result of [showGroupPickDialog].
 class GroupPickResult {
-  const GroupPickResult.profile(this.profileId) : createProfile = false;
+  const GroupPickResult.profile(this.profileId)
+      : createProfile = false,
+        none = false;
   const GroupPickResult.createProfile()
       : profileId = null,
-        createProfile = true;
+        createProfile = true,
+        none = false;
+  const GroupPickResult.none()
+      : profileId = null,
+        createProfile = false,
+        none = true;
 
   final String? profileId;
   final bool createProfile;
+  final bool none;
 }
 
-/// Pick a group with a Domain, or choose Create profile.
+/// Pick a group with a Domain, create a profile, or connect without a group.
 Future<GroupPickResult?> showGroupPickDialog(
   BuildContext context, {
   required List<ConnectionProfileCard> profiles,
@@ -174,6 +182,14 @@ Future<GroupPickResult?> showGroupPickDialog(
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: const Key('group-pick-none'),
+            onPressed: () => Navigator.pop(
+              ctx,
+              const GroupPickResult.none(),
+            ),
+            child: const Text('Connect without group'),
           ),
           if (offerCreateProfile)
             TextButton(
@@ -497,6 +513,11 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
           hostLabel: t.connectHost,
         );
         if (pick == null || !mounted) return;
+        if (pick.none) {
+          setState(() => _profileKey = '__none__');
+          fromPicker = true;
+          continue;
+        }
         if (pick.createProfile) {
           final create = widget.onCreateProfile;
           if (create == null) {
@@ -689,7 +710,7 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
                   ),
                   DropdownMenuItem(
                     value: false,
-                    child: Text('Standard (server chooses)'),
+                    child: Text('Classic first (VeNCrypt if only option)'),
                   ),
                 ],
                 onChanged: (v) =>
@@ -1131,7 +1152,7 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
                           ),
                           DropdownMenuItem(
                             value: false,
-                            child: Text('Standard (server chooses)'),
+                            child: Text('Classic first (VeNCrypt if only option)'),
                           ),
                         ],
                         onChanged: (v) => setState(

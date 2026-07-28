@@ -1077,6 +1077,19 @@ class _HubPageState extends State<HubPage> with WindowListener {
             hostLabel: target.connectHost,
           );
           if (pick == null || !mounted) return;
+          if (pick.none) {
+            final noneResult = resolveNewConnectionHost(
+              rawInput: raw,
+              profiles: profiles,
+              profileKey: '__none__',
+            );
+            if (noneResult.error != null) {
+              setState(() => _searchPatternError = noneResult.error);
+              return;
+            }
+            await _finishAddressBarConnect(target: noneResult.target!);
+            return;
+          }
           if (pick.createProfile) {
             final created = await _createOrEditProfile();
             if (created == null || !mounted) return;
@@ -1163,6 +1176,7 @@ class _HubPageState extends State<HubPage> with WindowListener {
       'port': port,
       if (target.displayNumber != null) 'display_number': target.displayNumber,
       if (profileId != null) 'profile_id': profileId,
+      if (profileId == null) 'profile_none': true,
       if (displayName != null) 'display_name': displayName,
     };
     if (displayName != null) {
@@ -2056,10 +2070,6 @@ class _HubPageState extends State<HubPage> with WindowListener {
         try {
           _bridge?.grab(id);
         } catch (_) {}
-        final s = _sessions.findBySessionId(id);
-        if (s != null) {
-          _search.text = addressForTab(s.host, s.port);
-        }
       }
     });
     unawaited(_syncWindowTitle());
@@ -2073,10 +2083,6 @@ class _HubPageState extends State<HubPage> with WindowListener {
       _libraryOverlayOpen = false;
       _activeTabSessionId = id;
       _sessions.applyTabGrabPolicy(activeId: id);
-      final s = _sessions.findBySessionId(id);
-      if (s != null) {
-        _search.text = addressForTab(s.host, s.port);
-      }
     });
     try {
       _bridge?.grab(id);

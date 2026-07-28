@@ -270,6 +270,10 @@ class _ProfileEditorDialogState extends State<_ProfileEditorDialog> {
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 title: const Text('Prefer VeNCrypt / TLS'),
+                subtitle: const Text(
+                  'When the server offers both classic and VeNCrypt, prefer TLS. '
+                  'VeNCrypt-only servers always use VeNCrypt.',
+                ),
                 value: _preferVencrypt,
                 onChanged: (v) =>
                     setState(() => _preferVencrypt = v ?? false),
