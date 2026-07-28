@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" role="img" aria-label="Helmhost">
+  <defs>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4A5A72"/>
+      <stop offset="50%" stop-color="#3B485E"/>
+      <stop offset="100%" stop-color="#323E52"/>
+    </linearGradient>
+    <filter id="castShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="1.5" dy="1.2" stdDeviation="1.2" flood-color="#000000" flood-opacity="0.48"/>
+    </filter>
+  </defs>
+  <rect width="720" height="200" rx="16" fill="#12161F"/>
+  <g transform="translate(20,20)">
+    <rect width="160" height="160" rx="36" fill="#11192D"/>
+    <path fill="url(#shieldGrad)" d="
+      M34.38 81.25
+      L34.38 32.03
+      C45.31 34.38 59.38 35.16 71.09 26.56
+      C76.25 22.66 79.38 20.31 80.00 19.69
+      C80.62 20.31 83.75 22.66 88.91 26.56
+      C100.62 35.16 114.69 34.38 125.62 32.03
+      L125.62 81.25
+      C125.62 106.25 102.34 129.38 80.00 137.50
+      C57.66 129.38 34.38 106.25 34.38 81.25 Z"/>
+    <g transform="translate(80,76)" filter="url(#castShadow)">
+      <g fill="#F4F6FA">
+        <circle cx="0" cy="-28.5" r="1.7"/>
+        <circle cx="0" cy="28.5" r="1.7"/>
+        <circle cx="-28.5" cy="0" r="1.7"/>
+        <circle cx="28.5" cy="0" r="1.7"/>
+        <circle cx="-20.1" cy="-20.1" r="1.5"/>
+        <circle cx="20.1" cy="-20.1" r="1.5"/>
+        <circle cx="-20.1" cy="20.1" r="1.5"/>
+        <circle cx="20.1" cy="20.1" r="1.5"/>
+      </g>
+      <g fill="none" stroke="#F4F6FA" stroke-linecap="round" stroke-linejoin="round">
+        <circle r="20" stroke-width="3.4"/>
+        <circle r="6.2" stroke-width="2.3"/>
+        <g stroke-width="2.3">
+          <line x1="0" y1="-6.2" x2="0" y2="-18.4"/>
+          <line x1="0" y1="6.2" x2="0" y2="18.4"/>
+          <line x1="-6.2" y1="0" x2="-18.4" y2="0"/>
+          <line x1="6.2" y1="0" x2="18.4" y2="0"/>
+          <line x1="-4.4" y1="-4.4" x2="-13.1" y2="-13.1"/>
+          <line x1="4.4" y1="4.4" x2="13.1" y2="13.1"/>
+          <line x1="4.4" y1="-4.4" x2="13.1" y2="-13.1"/>
+          <line x1="-4.4" y1="4.4" x2="-13.1" y2="13.1"/>
+          <line x1="0" y1="-20" x2="0" y2="-26.7"/>
+          <line x1="0" y1="20" x2="0" y2="26.7"/>
+          <line x1="-20" y1="0" x2="-26.7" y2="0"/>
+          <line x1="20" y1="0" x2="26.7" y2="0"/>
+          <line x1="-14.1" y1="-14.1" x2="-18.9" y2="-18.9"/>
+          <line x1="14.1" y1="14.1" x2="18.9" y2="18.9"/>
+          <line x1="14.1" y1="-14.1" x2="18.9" y2="-18.9"/>
+          <line x1="-14.1" y1="14.1" x2="-18.9" y2="18.9"/>
+        </g>
+      </g>
+      <circle r="2.8" fill="#F4F6FA"/>
+    </g>
+  </g>
+  <text x="200" y="92"
+        font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="52" font-weight="700" letter-spacing="0.06em" fill="#F4F6FA">HELMHOST</text>
+  <text x="202" y="132"
+        font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="20" font-weight="500" fill="#8B93A7">Remote desktop for your machines.</text>
+</svg>

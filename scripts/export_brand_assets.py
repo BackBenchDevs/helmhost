@@ -17,10 +17,10 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 BRAND = ROOT / "apps/client/assets/brand"
-CONCEPTS = BRAND / "concepts"
-HH_MARK = CONCEPTS / "helmhost-icon-mark.svg"
-HH_FULL = CONCEPTS / "helmhost-icon.svg"
-HH_LOCK = CONCEPTS / "helmhost-lockup.svg"
+SOURCE = BRAND / "source"
+HH_MARK = SOURCE / "helmhost-icon-mark.svg"
+HH_FULL = SOURCE / "helmhost-icon.svg"
+HH_LOCK = SOURCE / "helmhost-lockup.svg"
 
 RSVG = shutil.which("rsvg-convert")
 if not RSVG:
