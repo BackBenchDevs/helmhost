@@ -5,7 +5,6 @@ on:
     branches: [main, master]
     paths:
       - "docs/**"
-      - "docs/appcast/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -31,9 +30,18 @@ jobs:
         run: mdbook build docs
       - name: Include appcast feeds
         run: |
+          set -euo pipefail
           mkdir -p docs/book
-          cp -f docs/appcast/appcast.xml docs/book/appcast.xml
-          cp -f docs/appcast/appcast-rcs.xml docs/book/appcast-rcs.xml
+          LIVE_BASE="https://docs.helmhost.bbdevs.com"
+          # Prefer live CDN tips so docs-only deploys do not wipe signed feeds.
+          for f in appcast.xml appcast-rcs.xml; do
+            if curl -fsSL "${LIVE_BASE}/${f}" -o "docs/book/${f}"; then
+              echo "using live ${f}"
+            else
+              cp -f "docs/appcast/${f}" "docs/book/${f}"
+              echo "using stub ${f}"
+            fi
+          done
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/book

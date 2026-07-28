@@ -6,7 +6,12 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   package:
@@ -87,8 +92,8 @@ jobs:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
           if [[ -z "${SPARKLE_ED_PRIVATE_KEY}" ]]; then
-            echo "warning: SPARKLE_ED_PRIVATE_KEY secret missing — skip sign" >&2
-            exit 0
+            echo "error: SPARKLE_ED_PRIVATE_KEY secret missing — cannot ship unsigned mac updates" >&2
+            exit 1
           fi
           chmod +x scripts/sign_update_macos.sh
           (cd apps/client/macos && pod install)
@@ -105,8 +110,8 @@ jobs:
           WINSPARKLE_DSA_PRIVATE_KEY: ${{ secrets.WINSPARKLE_DSA_PRIVATE_KEY }}
         run: |
           if [[ -z "${WINSPARKLE_DSA_PRIVATE_KEY}" ]]; then
-            echo "warning: WINSPARKLE_DSA_PRIVATE_KEY secret missing — skip sign" >&2
-            exit 0
+            echo "error: WINSPARKLE_DSA_PRIVATE_KEY secret missing — cannot ship unsigned Windows updates" >&2
+            exit 1
           fi
           chmod +x scripts/sign_update_windows.sh
           KEY="$(mktemp)"
@@ -122,6 +127,8 @@ jobs:
   publish:
     needs: package
     runs-on: ubuntu-latest
+    outputs:
+      feed: ${{ steps.files.outputs.feed }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -166,13 +173,26 @@ jobs:
             WIN_DSA_SIG="$(tr -d '[:space:]' <release-assets/windows.dsasig)"
           fi
 
+          if [[ -n "${MAC_ZIP}" && -z "${MAC_ED_SIG}" ]]; then
+            echo "error: macos zip present but macos.edsig missing" >&2
+            exit 1
+          fi
+          if [[ -n "${WIN_SETUP}" && -z "${WIN_DSA_SIG}" ]]; then
+            echo "error: windows setup present but windows.dsasig missing" >&2
+            exit 1
+          fi
+
           CHANNEL="$CHANNEL" VERSION="$VER" BUILD="${GITHUB_RUN_NUMBER}" TAG="$TAG" \
             MAC_ZIP="${MAC_ZIP}" MAC_ED_SIG="${MAC_ED_SIG}" \
             WIN_SETUP="${WIN_SETUP}" WIN_DSA_SIG="${WIN_DSA_SIG}" \
             OUT="release-assets/${FEED}" \
             ./scripts/generate_appcast.sh
 
-          cp -f "release-assets/${FEED}" "docs/appcast/${FEED}"
+          # Fail closed: no empty enclosure signatures in the generated feed.
+          if grep -E 'sparkle:(ed|dsa)Signature=""' "release-assets/${FEED}"; then
+            echo "error: generated feed has empty signature(s)" >&2
+            exit 1
+          fi
 
           rm -f release-assets/SHA256SUMS release-assets/macos.edsig release-assets/windows.dsasig
           ./scripts/write_digests.sh release-assets
@@ -197,53 +217,40 @@ jobs:
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # master is PR-protected; GITHUB_TOKEN cannot push appcast directly.
-      # Open a PR (Pages picks up docs/appcast after merge). Optional secret
-      # APPCAST_PUSH_TOKEN (PAT with contents+PR, and merge/bypass rights)
-      # enables squash-merge of that PR.
-      - name: Open appcast PR for Pages
+      - name: Install mdBook
+        run: |
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar -xz
+          sudo mv mdbook /usr/local/bin/
+      - name: Build docs + signed feeds for Pages
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.APPCAST_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
-          AUTO_MERGE_APPCAST: ${{ secrets.APPCAST_PUSH_TOKEN != '' }}
+          FEED: ${{ steps.files.outputs.feed }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mdbook build docs
+          mkdir -p docs/book
+          LIVE_BASE="https://docs.helmhost.bbdevs.com"
+          # Preserve the other channel's live tip; fall back to repo stubs.
+          for f in appcast.xml appcast-rcs.xml; do
+            if curl -fsSL "${LIVE_BASE}/${f}" -o "docs/book/${f}"; then
+              echo "preserved live ${f}"
+            else
+              cp -f "docs/appcast/${f}" "docs/book/${f}"
+              echo "stub fallback ${f}"
+            fi
+          done
+          cp -f "release-assets/${FEED}" "docs/book/${FEED}"
+          echo "published ${FEED} to Pages artifact"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/book
 
-          mkdir -p /tmp/helmhost-appcast
-          cp -a docs/appcast/. /tmp/helmhost-appcast/
-          git fetch origin master
-          BRANCH="chore/appcast-${GITHUB_REF_NAME}"
-          # Collect step dirties docs/appcast; discard so checkout can switch.
-          git restore --source=HEAD --worktree --staged -- docs/appcast 2>/dev/null || true
-          git checkout -f -B "$BRANCH" origin/master
-          mkdir -p docs/appcast
-          cp -a /tmp/helmhost-appcast/. docs/appcast/
-          git add docs/appcast/
-          if git diff --cached --quiet; then
-            echo "appcast unchanged vs master"
-            exit 0
-          fi
-
-          git commit -m "chore(release): update appcast for ${GITHUB_REF_NAME}"
-          git push -u origin "HEAD:${BRANCH}" --force
-
-          PR="$(gh pr list --head "$BRANCH" --base master --json number --jq '.[0].number // empty')"
-          if [[ -z "$PR" ]]; then
-            gh pr create \
-              --base master \
-              --head "$BRANCH" \
-              --title "chore(release): update appcast for ${GITHUB_REF_NAME}" \
-              --body "Auto-generated Sparkle/WinSparkle feed from the Release workflow for \`${GITHUB_REF_NAME}\`. Merge to refresh GitHub Pages (\`appcast.xml\` / \`appcast-rcs.xml\`)."
-            PR="$(gh pr list --head "$BRANCH" --base master --json number --jq '.[0].number')"
-          fi
-          echo "appcast PR #$PR"
-
-          if [[ "${AUTO_MERGE_APPCAST}" == "true" ]]; then
-            gh pr merge "$PR" --squash --delete-branch --admin \
-              || gh pr merge "$PR" --squash --delete-branch \
-              || echo "warning: could not auto-merge appcast PR #$PR — merge manually" >&2
-          else
-            echo "Set repo secret APPCAST_PUSH_TOKEN to auto-merge appcast PRs (optional)."
-          fi
+  deploy-feeds:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

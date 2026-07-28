@@ -27,10 +27,14 @@ escape() {
 EOF
 
   if [[ -n "${MAC_ZIP:-}" && -f "${MAC_ZIP}" ]]; then
+    SIG="${MAC_ED_SIG:-}"
+    if [[ -z "$SIG" ]]; then
+      echo "error: MAC_ED_SIG required when MAC_ZIP is set (empty edSignature not allowed)" >&2
+      exit 1
+    fi
     LEN="$(wc -c <"$MAC_ZIP" | tr -d ' ')"
     NAME="$(basename "$MAC_ZIP")"
     URL="$(escape "${ASSET_BASE}/${NAME}")"
-    SIG="${MAC_ED_SIG:-}"
     cat <<EOF
     <item>
       <title>Helmhost v${VERSION}</title>
@@ -47,10 +51,14 @@ EOF
   fi
 
   if [[ -n "${WIN_SETUP:-}" && -f "${WIN_SETUP}" ]]; then
+    SIG="${WIN_DSA_SIG:-}"
+    if [[ -z "$SIG" ]]; then
+      echo "error: WIN_DSA_SIG required when WIN_SETUP is set (empty dsaSignature not allowed)" >&2
+      exit 1
+    fi
     LEN="$(wc -c <"$WIN_SETUP" | tr -d ' ')"
     NAME="$(basename "$WIN_SETUP")"
     URL="$(escape "${ASSET_BASE}/${NAME}")"
-    SIG="${WIN_DSA_SIG:-}"
     cat <<EOF
     <item>
       <title>Helmhost v${VERSION}</title>

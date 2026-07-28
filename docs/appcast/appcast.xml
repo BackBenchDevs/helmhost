@@ -3,6 +3,6 @@
   <channel>
     <title>Helmhost stable</title>
     <language>en</language>
-    <!-- Populated by release workflow (scripts/generate_appcast.sh). -->
+    <!-- Stub only. Live signed feed is published by the Release workflow to Pages CDN. -->
   </channel>
 </rss>
