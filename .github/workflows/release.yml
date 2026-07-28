@@ -215,7 +215,9 @@ jobs:
           cp -a docs/appcast/. /tmp/helmhost-appcast/
           git fetch origin master
           BRANCH="chore/appcast-${GITHUB_REF_NAME}"
-          git checkout -B "$BRANCH" origin/master
+          # Collect step dirties docs/appcast; discard so checkout can switch.
+          git restore --source=HEAD --worktree --staged -- docs/appcast 2>/dev/null || true
+          git checkout -f -B "$BRANCH" origin/master
           mkdir -p docs/appcast
           cp -a /tmp/helmhost-appcast/. docs/appcast/
           git add docs/appcast/
