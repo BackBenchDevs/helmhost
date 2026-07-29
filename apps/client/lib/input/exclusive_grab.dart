@@ -1,5 +1,5 @@
-import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -13,21 +13,68 @@ const _channelName = 'helmhost/exclusive_grab';
 ///
 /// Channel payload for keys: `{ keysym, down, physical }` (TigerVNC press/release
 /// by physical id). Local viewer chords: `localShortcut` with `kind: paste|consume`.
+///
+/// Modals (auth dialog, etc.) must call [pauseForModal] / [resumeAfterModal] so
+/// the CGEventTap does not swallow TextField input.
 class ExclusiveGrab {
   ExclusiveGrab({
     MethodChannel? channel,
-  }) : _channel = channel ?? const MethodChannel(_channelName);
+    bool? forceSupported,
+  })  : _channel = channel ?? const MethodChannel(_channelName),
+        _forceSupported = forceSupported;
 
   final MethodChannel _channel;
-  var _active = false;
+  final bool? _forceSupported;
+
+  /// Process-wide: nested modal pause depth. Tap is off while > 0.
+  static int _uiPauseDepth = 0;
+
+  /// Last grab that called [start] and still wants to be active.
+  static ExclusiveGrab? _activeInstance;
+
+  var _wantActive = false;
+  var _nativeActive = false;
   void Function(int keysym, bool down, int physical)? _onKey;
   VoidCallback? _onReleaseChord;
   void Function(String kind)? _onLocalShortcut;
 
   bool get isSupported =>
-      !kIsWeb && (Platform.isMacOS || Platform.isWindows);
+      _forceSupported ??
+      (!kIsWeb && (Platform.isMacOS || Platform.isWindows));
 
-  bool get isActive => _active;
+  /// True while the native tap is running (not merely "wanted").
+  bool get isActive => _nativeActive;
+
+  /// True if this instance still wants grab when modals close.
+  bool get wantsActive => _wantActive;
+
+  @visibleForTesting
+  static int get debugUiPauseDepth => _uiPauseDepth;
+
+  @visibleForTesting
+  static ExclusiveGrab? get debugActiveInstance => _activeInstance;
+
+  @visibleForTesting
+  static void debugResetModalPause() {
+    _uiPauseDepth = 0;
+    _activeInstance = null;
+  }
+
+  /// Pause native grab for a modal UI (auth dialog, etc.). Nestable.
+  static Future<void> pauseForModal() async {
+    _uiPauseDepth++;
+    await _activeInstance?._stopNative(clearCallbacks: false);
+  }
+
+  /// Resume after [pauseForModal]. Restarts tap when depth hits 0 and grab is wanted.
+  static Future<void> resumeAfterModal() async {
+    _uiPauseDepth = math.max(0, _uiPauseDepth - 1);
+    if (_uiPauseDepth > 0) return;
+    final g = _activeInstance;
+    if (g != null && g._wantActive) {
+      await g._startNative();
+    }
+  }
 
   /// Start swallowing host shortcuts and forwarding keysyms.
   Future<void> start({
@@ -39,29 +86,49 @@ class ExclusiveGrab {
     _onKey = onKey;
     _onReleaseChord = onReleaseChord;
     _onLocalShortcut = onLocalShortcut;
+    _wantActive = true;
+    _activeInstance = this;
+    if (_uiPauseDepth > 0) return;
+    await _startNative();
+  }
+
+  Future<void> stop() async {
+    _wantActive = false;
+    if (_activeInstance == this) {
+      _activeInstance = null;
+    }
+    await _stopNative(clearCallbacks: true);
+  }
+
+  Future<void> _startNative() async {
+    if (!isSupported || _nativeActive) return;
     _channel.setMethodCallHandler(_onPlatformCall);
     try {
       await _channel.invokeMethod<void>('start');
-      _active = true;
+      _nativeActive = true;
     } on MissingPluginException {
-      _active = false;
+      _nativeActive = false;
       _channel.setMethodCallHandler(null);
     } catch (_) {
-      _active = false;
+      _nativeActive = false;
       _channel.setMethodCallHandler(null);
       rethrow;
     }
   }
 
-  Future<void> stop() async {
-    if (!_active && !isSupported) return;
-    _active = false;
-    _onKey = null;
-    _onReleaseChord = null;
-    _onLocalShortcut = null;
-    try {
-      await _channel.invokeMethod<void>('stop');
-    } catch (_) {}
+  Future<void> _stopNative({required bool clearCallbacks}) async {
+    final wasActive = _nativeActive;
+    _nativeActive = false;
+    if (clearCallbacks) {
+      _onKey = null;
+      _onReleaseChord = null;
+      _onLocalShortcut = null;
+    }
+    if (wasActive) {
+      try {
+        await _channel.invokeMethod<void>('stop');
+      } catch (_) {}
+    }
     _channel.setMethodCallHandler(null);
   }
 

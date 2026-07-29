@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../input/exclusive_grab.dart';
 import '../session_helpers.dart';
 
 class AuthDialogResult {
@@ -20,17 +21,23 @@ Future<AuthDialogResult?> showAuthDialog(
   String? initialUsername,
   String? connectingTo,
   bool defaultSavePermanently = false,
-}) {
-  return showDialog<AuthDialogResult>(
-    context: context,
-    barrierDismissible: false,
-    builder: (ctx) => _AuthDialog(
-      need: need,
-      initialUsername: initialUsername,
-      connectingTo: connectingTo,
-      defaultSavePermanently: defaultSavePermanently,
-    ),
-  );
+}) async {
+  await ExclusiveGrab.pauseForModal();
+  try {
+    if (!context.mounted) return null;
+    return await showDialog<AuthDialogResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _AuthDialog(
+        need: need,
+        initialUsername: initialUsername,
+        connectingTo: connectingTo,
+        defaultSavePermanently: defaultSavePermanently,
+      ),
+    );
+  } finally {
+    await ExclusiveGrab.resumeAfterModal();
+  }
 }
 
 class _AuthDialog extends StatefulWidget {
@@ -53,6 +60,8 @@ class _AuthDialog extends StatefulWidget {
 class _AuthDialogState extends State<_AuthDialog> {
   late final TextEditingController _user;
   final _pass = TextEditingController();
+  late final FocusNode _userFocus;
+  late final FocusNode _passFocus;
   late bool _savePermanently;
   var _obscure = true;
 
@@ -60,13 +69,25 @@ class _AuthDialogState extends State<_AuthDialog> {
   void initState() {
     super.initState();
     _user = TextEditingController(text: widget.initialUsername ?? '');
+    _userFocus = FocusNode();
+    _passFocus = FocusNode();
     _savePermanently = widget.defaultSavePermanently;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (widget.need == AuthNeed.usernamePassword) {
+        _userFocus.requestFocus();
+      } else {
+        _passFocus.requestFocus();
+      }
+    });
   }
 
   @override
   void dispose() {
     _user.dispose();
     _pass.dispose();
+    _userFocus.dispose();
+    _passFocus.dispose();
     super.dispose();
   }
 
@@ -93,16 +114,16 @@ class _AuthDialogState extends State<_AuthDialog> {
             if (needUser)
               TextField(
                 controller: _user,
+                focusNode: _userFocus,
                 decoration: const InputDecoration(
                   labelText: 'Username',
                 ),
-                autofocus: true,
               ),
             if (needUser) const SizedBox(height: 12),
             TextField(
               controller: _pass,
+              focusNode: _passFocus,
               obscureText: _obscure,
-              autofocus: !needUser,
               decoration: InputDecoration(
                 labelText: 'Password',
                 suffixIcon: IconButton(

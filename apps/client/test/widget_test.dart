@@ -100,6 +100,37 @@ void main() {
     expect(result?.savePermanently, isTrue);
   });
 
+  testWidgets('AuthDialog username field accepts typed input', (tester) async {
+    AuthDialogResult? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await showAuthDialog(
+                  context,
+                  need: AuthNeed.usernamePassword,
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    final fields = find.byType(TextField);
+    expect(fields, findsNWidgets(2));
+    await tester.enterText(fields.at(0), 'am042433');
+    await tester.enterText(fields.at(1), 'hunter2');
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(result?.username, 'am042433');
+    expect(result?.password, 'hunter2');
+  });
+
   test('MemoryCredentialStore round-trip', () async {
     final store = MemoryCredentialStore();
     await store.writePassword('host:5900', 'secret');
