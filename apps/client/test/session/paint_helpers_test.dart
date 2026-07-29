@@ -44,6 +44,35 @@ void main() {
     });
   });
 
+  group('flutterButtonsToRfb', () {
+    test('maps Flutter right-click to RFB right bit', () {
+      // Flutter kSecondaryButton = 0x02 → RFB right = 0x04
+      expect(flutterButtonsToRfb(0x02), kRfbButtonRight);
+      expect(flutterButtonsToRfb(0x02), isNot(kRfbButtonMiddle));
+    });
+
+    test('maps Flutter middle-click to RFB middle bit', () {
+      // Flutter kTertiaryButton = 0x04 → RFB middle = 0x02
+      expect(flutterButtonsToRfb(0x04), kRfbButtonMiddle);
+    });
+
+    test('left click stays bit 0', () {
+      expect(flutterButtonsToRfb(0x01), kRfbButtonLeft);
+    });
+
+    test('preserves RFB scroll bits from wheel path', () {
+      expect(flutterButtonsToRfb(1 << 3), 1 << 3);
+      expect(flutterButtonsToRfb(1 << 4), 1 << 4);
+    });
+
+    test('combines left+right correctly', () {
+      expect(
+        flutterButtonsToRfb(0x01 | 0x02),
+        kRfbButtonLeft | kRfbButtonRight,
+      );
+    });
+  });
+
   group('kPointerFlushInterval', () {
     test('is sub-frame for responsive moves', () {
       expect(kPointerFlushInterval.inMilliseconds, lessThan(16));

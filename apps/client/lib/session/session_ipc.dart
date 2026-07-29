@@ -84,6 +84,16 @@ bool shouldAutoReconnect({
   return true;
 }
 
+/// How many reconnect attempts to run before showing the reconnect popup.
+///
+/// Always at least one immediate attempt (no dialog first). When auto-reconnect
+/// is enabled, use the full [maxAttempts] budget with backoff.
+int reconnectAttemptsBeforePrompt({
+  required bool autoEnabled,
+  int maxAttempts = 3,
+}) =>
+    autoEnabled ? maxAttempts : 1;
+
 /// Whether to show Reconnect (or auto-reconnect) after a disconnect event.
 ///
 /// Intentional Hub/user close must not surface the unexpected-drop dialog.

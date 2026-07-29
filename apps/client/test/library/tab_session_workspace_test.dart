@@ -64,6 +64,20 @@ void main() {
     });
   });
 
+  group('reconnectAttemptsBeforePrompt', () {
+    test('one immediate attempt when auto off', () {
+      expect(reconnectAttemptsBeforePrompt(autoEnabled: false), 1);
+    });
+
+    test('full budget when auto on', () {
+      expect(reconnectAttemptsBeforePrompt(autoEnabled: true), 3);
+      expect(
+        reconnectAttemptsBeforePrompt(autoEnabled: true, maxAttempts: 5),
+        5,
+      );
+    });
+  });
+
   group('shouldOfferReconnectAfterDisconnect', () {
     test('unexpected drop offers reconnect', () {
       expect(

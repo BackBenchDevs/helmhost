@@ -139,6 +139,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
   String? _lastError;
   SessionConnState _connState = SessionConnState.connecting;
   int _reconnectAttempt = 0;
+  int _reconnectMaxAttempts = _maxReconnectAttempts;
   String? _sessionPassword;
   String? _sessionUsername;
   final _linkStats = SessionLinkStats();
@@ -318,7 +319,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         height: _fh > 0 ? _fh : null,
         errorText: _lastError,
         reconnectAttempt: _reconnectAttempt,
-        maxReconnectAttempts: _maxReconnectAttempts,
+        maxReconnectAttempts: _reconnectMaxAttempts,
       ),
     );
   }
@@ -1066,11 +1067,12 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
       embedded: _embedded,
       unknownSession: unknown,
     );
-    if (auto) {
-      unawaited(_runReconnectLoop());
-    } else {
-      await _showReconnectDialog(reason: _lastError!);
-    }
+    // Always attempt reconnect immediately; popup only after attempts fail.
+    unawaited(
+      _runReconnectLoop(
+        maxAttempts: reconnectAttemptsBeforePrompt(autoEnabled: auto),
+      ),
+    );
   }
 
   Future<void> _showReconnectDialog({required String reason}) async {
@@ -1125,18 +1127,20 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     }
   }
 
-  Future<void> _runReconnectLoop() async {
+  Future<void> _runReconnectLoop({int? maxAttempts}) async {
+    final attempts = maxAttempts ?? _maxReconnectAttempts;
     _pollStoppedForStale = false;
     setState(() {
       _connState = SessionConnState.reconnecting;
       _reconnectAttempt = 0;
+      _reconnectMaxAttempts = attempts;
       _lastError = null;
       // Keep last frame under BufferingOverlay (no black flash).
       _linkStats.reset();
     });
     _ensureTimers();
 
-    for (var i = 0; i < _maxReconnectAttempts; i++) {
+    for (var i = 0; i < attempts; i++) {
       if (!mounted) return;
       setState(() => _reconnectAttempt = i + 1);
       if (i > 0) {
@@ -1158,7 +1162,9 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
     if (!mounted) return;
     setState(() {
       _connState = SessionConnState.disconnected;
-      _lastError = 'Reconnect failed after $_maxReconnectAttempts attempts';
+      _lastError = attempts == 1
+          ? 'Reconnect failed'
+          : 'Reconnect failed after $attempts attempts';
     });
     await _showReconnectDialog(reason: _lastError!);
   }
@@ -1614,7 +1620,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         if (showBuffer)
           BufferingOverlay(
             message: _connState == SessionConnState.reconnecting
-                ? 'Reconnecting… ($_reconnectAttempt/$_maxReconnectAttempts)'
+                ? 'Reconnecting… ($_reconnectAttempt/$_reconnectMaxAttempts)'
                 : 'Connecting…',
             detail: _lastError,
           ),
@@ -1633,10 +1639,14 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
         child: MouseRegion(
           cursor: _sessionMouseCursor,
           child: Listener(
-            onPointerDown: (e) => _onPointer(e.position, e.buttons),
-            onPointerMove: (e) => _onPointer(e.position, e.buttons),
-            onPointerUp: (e) => _onPointer(e.position, 0),
-            onPointerHover: (e) => _onPointer(e.position, 0),
+            onPointerDown: (e) =>
+                _onPointer(e.position, flutterButtonsToRfb(e.buttons)),
+            onPointerMove: (e) =>
+                _onPointer(e.position, flutterButtonsToRfb(e.buttons)),
+            onPointerUp: (e) =>
+                _onPointer(e.position, flutterButtonsToRfb(e.buttons)),
+            onPointerHover: (e) =>
+                _onPointer(e.position, flutterButtonsToRfb(e.buttons)),
             onPointerSignal: (e) {
               if (e is PointerScrollEvent) _onScroll(e);
             },
@@ -1692,7 +1702,7 @@ class _SessionPageState extends State<SessionPage> with WindowListener {
           onToggleGrab: () => _setGrabbed(!_grabbed),
           errorText: _lastError,
           reconnectAttempt: _reconnectAttempt,
-          maxReconnectAttempts: _maxReconnectAttempts,
+          maxReconnectAttempts: _reconnectMaxAttempts,
           autoReconnect: widget.prefs?.autoReconnectOnDrop ?? false,
           onAutoReconnectChanged: widget.prefs == null
               ? null
