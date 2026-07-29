@@ -20,11 +20,20 @@ fn tiger_vnc_subtype_ids() {
 }
 
 #[test]
-fn pick_prefers_tlsplain_with_user_pass() {
+fn pick_prefers_tlsplain_with_user_pass_when_no_x509() {
     let subs = [VENCRYPT_TLSNONE, VENCRYPT_TLSVNC, VENCRYPT_TLSPLAIN];
     assert_eq!(
         pick_vencrypt_subtype(&subs, true, true).unwrap(),
         VENCRYPT_TLSPLAIN
+    );
+}
+
+#[test]
+fn pick_prefers_x509plain_over_tlsplain() {
+    let subs = [VENCRYPT_TLSPLAIN, VENCRYPT_X509PLAIN];
+    assert_eq!(
+        pick_vencrypt_subtype(&subs, true, true).unwrap(),
+        VENCRYPT_X509PLAIN
     );
 }
 
@@ -38,6 +47,15 @@ fn pick_tlsvnc_with_password_only() {
 }
 
 #[test]
+fn pick_prefers_x509vnc_over_tlsvnc() {
+    let subs = [VENCRYPT_TLSVNC, VENCRYPT_X509VNC];
+    assert_eq!(
+        pick_vencrypt_subtype(&subs, false, true).unwrap(),
+        VENCRYPT_X509VNC
+    );
+}
+
+#[test]
 fn pick_tlsnone_without_credentials() {
     let subs = [VENCRYPT_TLSNONE, VENCRYPT_PLAIN];
     assert_eq!(
@@ -47,16 +65,25 @@ fn pick_tlsnone_without_credentials() {
 }
 
 #[test]
+fn pick_prefers_x509none_over_tlsnone() {
+    let subs = [VENCRYPT_TLSNONE, VENCRYPT_X509NONE];
+    assert_eq!(
+        pick_vencrypt_subtype(&subs, false, false).unwrap(),
+        VENCRYPT_X509NONE
+    );
+}
+
+#[test]
 fn pick_plain_family_when_only_option() {
-    // gcdvda-style: TLSPlain + X509Plain only — still pick so UI can prompt.
+    // gcdvda-style: prefer X509Plain (rustls) over TLSPlain (anon).
     let subs = [VENCRYPT_TLSPLAIN, VENCRYPT_X509PLAIN];
     assert_eq!(
         pick_vencrypt_subtype(&subs, false, true).unwrap(),
-        VENCRYPT_TLSPLAIN
+        VENCRYPT_X509PLAIN
     );
     assert_eq!(
         pick_vencrypt_subtype(&subs, false, false).unwrap(),
-        VENCRYPT_TLSPLAIN
+        VENCRYPT_X509PLAIN
     );
 }
 
@@ -206,7 +233,7 @@ async fn plain_only_no_creds_returns_need_without_writing_subtype() {
 }
 
 #[tokio::test]
-async fn plain_only_with_user_pass_writes_tlsplain() {
+async fn plain_only_with_user_pass_writes_x509plain() {
     let (mut client, mut server) = duplex(256);
     let server_task = tokio::spawn(async move {
         server.write_all(&[0, 2]).await.unwrap();
@@ -224,14 +251,14 @@ async fn plain_only_with_user_pass_writes_tlsplain() {
             .unwrap();
         let mut chosen = [0u8; 4];
         server.read_exact(&mut chosen).await.unwrap();
-        assert_eq!(u32::from_be_bytes(chosen), VENCRYPT_TLSPLAIN);
+        assert_eq!(u32::from_be_bytes(chosen), VENCRYPT_X509PLAIN);
         server.write_all(&[1]).await.unwrap();
     });
 
     let subtype = negotiate_vencrypt_subtype(&mut client, true, true)
         .await
         .unwrap();
-    assert_eq!(subtype, VENCRYPT_TLSPLAIN);
+    assert_eq!(subtype, VENCRYPT_X509PLAIN);
     server_task.await.unwrap();
 }
 

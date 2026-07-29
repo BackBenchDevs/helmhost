@@ -57,7 +57,20 @@ pub fn vencrypt_subtype_is_x509(subtype: u32) -> bool {
     )
 }
 
-/// Pick a VeNCrypt subtype from the server list (TigerVNC-oriented preference).
+/// True when the subtype uses anonymous TLS (VeNCrypt TLS\* prefix).
+///
+/// rustls cannot negotiate ANON-DH/ANON-ECDH; prefer [`vencrypt_subtype_is_x509`] peers.
+pub fn vencrypt_subtype_is_anon_tls(subtype: u32) -> bool {
+    matches!(
+        subtype,
+        VENCRYPT_TLSNONE | VENCRYPT_TLSVNC | VENCRYPT_TLSPLAIN
+    )
+}
+
+/// Pick a VeNCrypt subtype from the server list.
+///
+/// Prefers X509\* over TLS\* because Helmhost uses rustls, which does not support
+/// the anonymous ciphers required by VeNCrypt TLS\* subtypes.
 pub fn pick_vencrypt_subtype(
     subtypes: &[u32],
     have_user: bool,
@@ -66,26 +79,26 @@ pub fn pick_vencrypt_subtype(
     let has = |t: u32| subtypes.contains(&t);
 
     if have_user && have_password {
-        if has(VENCRYPT_TLSPLAIN) {
-            return Ok(VENCRYPT_TLSPLAIN);
-        }
         if has(VENCRYPT_X509PLAIN) {
             return Ok(VENCRYPT_X509PLAIN);
         }
+        if has(VENCRYPT_TLSPLAIN) {
+            return Ok(VENCRYPT_TLSPLAIN);
+        }
     }
     if have_password {
-        if has(VENCRYPT_TLSVNC) {
-            return Ok(VENCRYPT_TLSVNC);
-        }
         if has(VENCRYPT_X509VNC) {
             return Ok(VENCRYPT_X509VNC);
         }
-    }
-    if has(VENCRYPT_TLSNONE) {
-        return Ok(VENCRYPT_TLSNONE);
+        if has(VENCRYPT_TLSVNC) {
+            return Ok(VENCRYPT_TLSVNC);
+        }
     }
     if has(VENCRYPT_X509NONE) {
         return Ok(VENCRYPT_X509NONE);
+    }
+    if has(VENCRYPT_TLSNONE) {
+        return Ok(VENCRYPT_TLSNONE);
     }
     if have_user && have_password && has(VENCRYPT_PLAIN) {
         return Ok(VENCRYPT_PLAIN);
@@ -103,11 +116,12 @@ pub fn pick_vencrypt_subtype(
 
     // Plain-family only (e.g. [TLSPlain, X509Plain]): still select so auth can
     // return NEED_USERNAME_PASSWORD instead of failing at subtype pick.
-    if has(VENCRYPT_TLSPLAIN) {
-        return Ok(VENCRYPT_TLSPLAIN);
-    }
+    // Prefer X509Plain — rustls can complete that handshake.
     if has(VENCRYPT_X509PLAIN) {
         return Ok(VENCRYPT_X509PLAIN);
+    }
+    if has(VENCRYPT_TLSPLAIN) {
+        return Ok(VENCRYPT_TLSPLAIN);
     }
     if has(VENCRYPT_PLAIN) {
         return Ok(VENCRYPT_PLAIN);
@@ -258,6 +272,18 @@ impl ServerCertVerifier for NoVerifier {
     }
 }
 
+fn map_tls_connect_error(subtype: u32, err: impl std::fmt::Display) -> String {
+    let msg = err.to_string();
+    if vencrypt_subtype_is_anon_tls(subtype) {
+        return format!(
+            "TLS connect: {msg}; VeNCrypt TLS* subtypes need anonymous TLS \
+             (unsupported by rustls) — use an X509* subtype (enable Accept invalid \
+             certificates for lab PEMs) or a GnuTLS-based viewer for TLSPlain/TLSVnc"
+        );
+    }
+    format!("TLS connect: {msg}")
+}
+
 /// Wrap TCP in TLS. For TLS\* subtypes (non-X509), accept invalid certs by default
 /// because many VeNCrypt servers use self-signed/anon-style certs. X509\* respects
 /// [`TlsOptions::danger_accept_invalid_certs`].
@@ -274,5 +300,5 @@ pub async fn wrap_tcp_tls(
     connector
         .connect(name, stream)
         .await
-        .map_err(|e| format!("TLS connect: {e}"))
+        .map_err(|e| map_tls_connect_error(subtype, e))
 }

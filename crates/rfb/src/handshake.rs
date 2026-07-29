@@ -43,10 +43,52 @@ pub fn parse_version(buf: &[u8]) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Extract major/minor from an `RFB 003.008\n`-style version string.
+pub fn version_major_minor(ver: &str) -> Result<(u16, u16), String> {
+    let s = ver.trim();
+    if !s.starts_with("RFB ") || s.len() < 11 {
+        return Err(format!("bad version: {ver:?}"));
+    }
+    let major: u16 = s[4..7]
+        .parse()
+        .map_err(|_| format!("bad major in {ver:?}"))?;
+    let minor: u16 = s[8..11]
+        .parse()
+        .map_err(|_| format!("bad minor in {ver:?}"))?;
+    Ok((major, minor))
+}
+
 pub fn encode_client_version() -> [u8; 12] {
     let mut out = [0u8; 12];
     out.copy_from_slice(RFB_003_008);
     out
+}
+
+pub fn encode_client_version_33() -> [u8; 12] {
+    *b"RFB 003.003\n"
+}
+
+async fn read_security_failure_reason<S: AsyncRead + Unpin>(stream: &mut S) -> String {
+    let len_buf = match read_exact(stream, 4).await {
+        Ok(b) => b,
+        Err(_) => return String::new(),
+    };
+    let len = u32::from_be_bytes([len_buf[0], len_buf[1], len_buf[2], len_buf[3]]) as usize;
+    if !(1..=4096).contains(&len) {
+        return String::new();
+    }
+    match read_exact(stream, len).await {
+        Ok(raw) => String::from_utf8_lossy(&raw).trim().to_string(),
+        Err(_) => String::new(),
+    }
+}
+
+fn reject_with_reason(reason: String) -> String {
+    if reason.is_empty() {
+        "server sent zero security types".into()
+    } else {
+        format!("server rejected connection: {reason}")
+    }
 }
 
 pub fn parse_security_types(buf: &[u8]) -> Result<Vec<u8>, String> {
@@ -131,7 +173,7 @@ pub fn parse_security_result(buf: &[u8]) -> Result<(), String> {
     if code == SEC_RESULT_OK {
         Ok(())
     } else {
-        Err(format!("security failed code={code}"))
+        Err(format!("security result failed code={code}"))
     }
 }
 
@@ -141,14 +183,14 @@ pub fn encode_client_init(shared: bool) -> [u8; 1] {
 
 pub fn parse_server_init(buf: &[u8]) -> Result<ServerInit, String> {
     if buf.len() < 24 {
-        return Err("server init truncated".into());
+        return Err("ServerInit truncated".into());
     }
     let width = u16::from_be_bytes([buf[0], buf[1]]);
     let height = u16::from_be_bytes([buf[2], buf[3]]);
     let pixel_format = PixelFormat::decode(&buf[4..20])?;
     let name_len = u32::from_be_bytes([buf[20], buf[21], buf[22], buf[23]]) as usize;
     if buf.len() < 24 + name_len {
-        return Err("server name truncated".into());
+        return Err("ServerInit name truncated".into());
     }
     let name = String::from_utf8_lossy(&buf[24..24 + name_len]).into_owned();
     Ok(ServerInit {
@@ -166,8 +208,8 @@ pub async fn vnc_auth_exchange<S: AsyncRead + AsyncWrite + Unpin>(
     let challenge = read_exact(stream, 16).await?;
     let mut ch = [0u8; 16];
     ch.copy_from_slice(&challenge);
-    let resp = encrypt_challenge(password, &ch);
-    write_all(stream, &resp).await?;
+    let response = encrypt_challenge(password, &ch);
+    write_all(stream, &response).await?;
     Ok(())
 }
 
@@ -199,13 +241,49 @@ pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
     prefer_vencrypt: bool,
 ) -> Result<(ServerInit, Option<u8>), String> {
     let ver = read_exact(stream, 12).await?;
-    let _ = parse_version(&ver)?;
+    let ver_str = parse_version(&ver)?;
+    let (major, minor) = version_major_minor(&ver_str)?;
+
+    // RFB 3.3 (incl. TigerVNC IP blacklist): U32 security type, not U8 count.
+    // Blacklist sends "RFB 003.003\n" + U32(0) + reason without a normal 3.8 list.
+    if major == 3 && minor < 7 {
+        write_all(stream, &encode_client_version_33()).await?;
+        let sec_buf = read_exact(stream, 4).await?;
+        let sec = u32::from_be_bytes([sec_buf[0], sec_buf[1], sec_buf[2], sec_buf[3]]);
+        if sec == 0 {
+            let reason = read_security_failure_reason(stream).await;
+            return Err(reject_with_reason(reason));
+        }
+        let sec_u8 = u8::try_from(sec).map_err(|_| format!("bad 3.3 security type {sec}"))?;
+        let have_pw = creds.password.as_ref().is_some_and(|p| !p.is_empty());
+        match sec_u8 {
+            SEC_NONE => {}
+            SEC_VNC_AUTH => {
+                if !have_pw {
+                    return Err(helmhost_core::NEED_PASSWORD.to_string());
+                }
+                let pw = creds.password.as_deref().unwrap();
+                vnc_auth_exchange(stream, pw).await?;
+                let result = read_exact(stream, 4).await?;
+                parse_security_result(&result)?;
+            }
+            other => {
+                return Err(format!(
+                    "RFB 3.3 security type {other} unsupported (VeNCrypt needs 3.7+)"
+                ));
+            }
+        }
+        let init = finish_client_server_init(stream).await?;
+        return Ok((init, None));
+    }
+
     write_all(stream, &encode_client_version()).await?;
 
     let nbuf = read_exact(stream, 1).await?;
     let n = nbuf[0] as usize;
     if n == 0 {
-        return Err("server sent zero security types".into());
+        let reason = read_security_failure_reason(stream).await;
+        return Err(reject_with_reason(reason));
     }
     let rest = read_exact(stream, n).await?;
     let mut full = Vec::with_capacity(1 + n);
@@ -220,6 +298,11 @@ pub async fn handshake_security_and_init<S: AsyncRead + AsyncWrite + Unpin>(
         return Err(helmhost_core::NEED_PASSWORD.to_string());
     }
     if sec == SEC_UNIX_LOGIN && (!have_user || !have_pw) {
+        return Err(helmhost_core::NEED_USERNAME_PASSWORD.to_string());
+    }
+    // VeNCrypt Plain/X509Plain need a username. Returning NEED before writing type 19
+    // avoids aborting mid-VeNCrypt (blacklist → RFB 3.3 "Too many security failures").
+    if sec == SEC_VENCRYPT && !have_user {
         return Err(helmhost_core::NEED_USERNAME_PASSWORD.to_string());
     }
     write_all(stream, &[sec]).await?;

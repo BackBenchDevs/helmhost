@@ -197,3 +197,86 @@ async fn handshake_unix_login_needs_username_password() {
     assert!(err.contains("NEED_USERNAME_PASSWORD"));
     let _ = server_task.await;
 }
+
+#[tokio::test]
+async fn handshake_vencrypt_needs_username_before_writing_type() {
+    use helmhost_rfb::handshake::SEC_VENCRYPT;
+    let (mut client, mut server) = duplex(512);
+    let server_task = tokio::spawn(async move {
+        server.write_all(b"RFB 003.008\n").await.unwrap();
+        let mut client_ver = [0u8; 12];
+        server.read_exact(&mut client_ver).await.unwrap();
+        server.write_all(&[1, SEC_VENCRYPT]).await.unwrap();
+        // Client must not select VeNCrypt (U8) before NEED when username is missing.
+        let mut chosen = [0u8; 1];
+        let read = tokio::time::timeout(
+            std::time::Duration::from_millis(80),
+            server.read_exact(&mut chosen),
+        )
+        .await;
+        assert!(read.is_err(), "must not write security type before NEED");
+    });
+
+    let creds = Creds {
+        username: None,
+        password: Some("pw".into()),
+    };
+    let err = handshake_security_and_init(&mut client, &creds, true)
+        .await
+        .unwrap_err();
+    assert!(err.contains("NEED_USERNAME_PASSWORD"));
+    let _ = server_task.await;
+}
+
+#[tokio::test]
+async fn handshake_zero_security_types_includes_reason() {
+    let (mut client, mut server) = duplex(512);
+    let server_task = tokio::spawn(async move {
+        server.write_all(b"RFB 003.008\n").await.unwrap();
+        let mut client_ver = [0u8; 12];
+        server.read_exact(&mut client_ver).await.unwrap();
+        let reason = b"Too many security failures";
+        let mut msg = vec![0u8]; // n = 0
+        msg.extend_from_slice(&(reason.len() as u32).to_be_bytes());
+        msg.extend_from_slice(reason);
+        server.write_all(&msg).await.unwrap();
+    });
+
+    let creds = Creds::default();
+    let err = handshake_security_and_init(&mut client, &creds, false)
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("Too many security failures"),
+        "got: {err}"
+    );
+    let _ = server_task.await;
+}
+
+/// TigerVNC blacklist: RFB 003.003 + U32(0) + reason (not a 3.8 type list).
+#[tokio::test]
+async fn handshake_blacklist_rfb_33_reason() {
+    let (mut client, mut server) = duplex(512);
+    let server_task = tokio::spawn(async move {
+        // Entire reject payload up front (as VNCServerST::addSocket does).
+        let reason = b"Too many security failures";
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"RFB 003.003\n");
+        msg.extend_from_slice(&0u32.to_be_bytes());
+        msg.extend_from_slice(&(reason.len() as u32).to_be_bytes());
+        msg.extend_from_slice(reason);
+        server.write_all(&msg).await.unwrap();
+        let mut client_ver = [0u8; 12];
+        let _ = server.read_exact(&mut client_ver).await;
+    });
+
+    let creds = Creds::default();
+    let err = handshake_security_and_init(&mut client, &creds, false)
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("Too many security failures"),
+        "got: {err}"
+    );
+    let _ = server_task.await;
+}
