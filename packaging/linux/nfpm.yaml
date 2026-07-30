@@ -1,0 +1,46 @@
+# nfpm config for Helmhost RPM (and optional DEB parity).
+# Staged tree must exist at ./stage (created by package_linux_rpm.sh).
+# VERSION is injected via env by the packager script.
+
+name: helmhost
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: BackBenchDevs <noreply@bbdevs.com>
+description: |
+  Open multi-session RFB / VNC viewer.
+  Helmhost desktop client.
+vendor: BackBenchDevs
+homepage: https://github.com/BackBenchDevs/helmhost
+license: Proprietary
+
+contents:
+  - src: ./stage/opt/helmhost
+    dst: /opt/helmhost
+    type: tree
+  - src: ./stage/usr/bin/helmhost
+    dst: /usr/bin/helmhost
+    file_info:
+      mode: 0755
+  - src: ./stage/usr/share/applications/helmhost.desktop
+    dst: /usr/share/applications/helmhost.desktop
+  - dst: /usr/share/icons/hicolor/256x256/apps/helmhost.png
+    src: ./stage/usr/share/icons/hicolor/256x256/apps/helmhost.png
+  - dst: /usr/share/pixmaps/helmhost.png
+    src: ./stage/usr/share/pixmaps/helmhost.png
+
+scripts:
+  postinstall: ./scripts/postinstall.sh
+  postremove: ./scripts/postremove.sh
+
+overrides:
+  rpm:
+    depends:
+      - gtk3
+      - xz-libs
+  deb:
+    depends:
+      - libgtk-3-0
+      - liblzma5

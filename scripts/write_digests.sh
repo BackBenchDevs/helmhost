@@ -39,7 +39,7 @@ for f in "$DIR"/*; do
   esac
   # Only package-like artifacts
   case "$base" in
-    *.zip|*.tar.gz|*.tgz|*.pkg|*.deb|*-setup.exe|*.exe) ;;
+    *.zip|*.tar.gz|*.tgz|*.pkg|*.deb|*.rpm|*.AppImage|*-setup.exe|*.exe) ;;
     *) continue ;;
   esac
 

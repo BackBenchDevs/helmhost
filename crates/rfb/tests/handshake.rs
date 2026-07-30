@@ -246,10 +246,7 @@ async fn handshake_zero_security_types_includes_reason() {
     let err = handshake_security_and_init(&mut client, &creds, false)
         .await
         .unwrap_err();
-    assert!(
-        err.contains("Too many security failures"),
-        "got: {err}"
-    );
+    assert!(err.contains("Too many security failures"), "got: {err}");
     let _ = server_task.await;
 }
 
@@ -274,9 +271,6 @@ async fn handshake_blacklist_rfb_33_reason() {
     let err = handshake_security_and_init(&mut client, &creds, false)
         .await
         .unwrap_err();
-    assert!(
-        err.contains("Too many security failures"),
-        "got: {err}"
-    );
+    assert!(err.contains("Too many security failures"), "got: {err}");
     let _ = server_task.await;
 }

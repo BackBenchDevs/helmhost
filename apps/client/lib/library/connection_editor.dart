@@ -701,16 +701,23 @@ class _NewConnectionDialogState extends State<_NewConnectionDialog> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<bool>(
+                isExpanded: true,
                 value: _preferVencrypt,
                 decoration: const InputDecoration(labelText: 'Encryption'),
                 items: const [
                   DropdownMenuItem(
                     value: true,
-                    child: Text('Prefer VeNCrypt / TLS'),
+                    child: Text(
+                      'Prefer VeNCrypt / TLS',
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   DropdownMenuItem(
                     value: false,
-                    child: Text('Classic first (VeNCrypt if only option)'),
+                    child: Text(
+                      'Classic first (VeNCrypt if only option)',
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ],
                 onChanged: (v) =>
@@ -1142,17 +1149,24 @@ class _PropertiesDialogState extends State<_PropertiesDialog>
                             setState(() => _savePassword = v ?? false),
                       ),
                       DropdownButtonFormField<bool>(
+                        isExpanded: true,
                         value: _preferVencrypt,
                         decoration:
                             const InputDecoration(labelText: 'Encryption'),
                         items: const [
                           DropdownMenuItem(
                             value: true,
-                            child: Text('Prefer VeNCrypt / TLS'),
+                            child: Text(
+                              'Prefer VeNCrypt / TLS',
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                           DropdownMenuItem(
                             value: false,
-                            child: Text('Classic first (VeNCrypt if only option)'),
+                            child: Text(
+                              'Classic first (VeNCrypt if only option)',
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         ],
                         onChanged: (v) => setState(

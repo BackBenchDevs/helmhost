@@ -8,6 +8,15 @@
 #ifndef MyAppChannel
   #define MyAppChannel "stable"
 #endif
+#ifndef MyAppCodename
+  #define MyAppCodename "lantern"
+#endif
+#ifndef MyAppRcSuffix
+  #define MyAppRcSuffix ""
+#endif
+#ifndef MyOutputBase
+  #define MyOutputBase "helmhost-stable-windows-x64-lantern-v0.1.0-setup"
+#endif
 #ifndef MySourceDir
   #define MySourceDir "..\..\apps\client\build\windows\x64\runner\Release"
 #endif
@@ -34,7 +43,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir={#MyOutDir}
-OutputBaseFilename=helmhost-{#MyAppChannel}-windows-x64-v{#MyAppVersion}-setup
+OutputBaseFilename={#MyOutputBase}
 SetupIconFile=..\..\apps\client\windows\runner\resources\app_icon.ico
 Compression=lzma2
 SolidCompression=yes

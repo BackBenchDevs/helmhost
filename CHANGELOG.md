@@ -6,7 +6,8 @@ The live version number is **only** in `VERSION` (use `./scripts/hh-version`).
 ## [Unreleased]
 
 ### Added
-- Installable packages: macOS `.pkg`, Linux `.deb`, Windows Inno `-setup.exe` (upgradeable)
+- Installable packages: macOS `.pkg`, Linux `.deb` / `.rpm` / `.AppImage`, Windows Inno `-setup.exe` (upgradeable)
+- Unified artifact names: `helmhost-{channel}-{os}-{arch}-{codename}-v{ver}[-rc.N][-setup].{ext}`
 - FFI copy into Flutter bundles + artifact smoke assert
 - Lighthouse era / Lantern codename map (`codenames.toml`) + Waypoint-style `hh-version show`
 - Helmhost brand app icons (macOS AppIcon + Hub empty state)

@@ -1,9 +1,7 @@
 //! Cursor pseudo-encoding advertise + decode smoke tests.
 
 use helmhost_rfb::cursor::{decode_cursor_with_alpha, decode_xcursor};
-use helmhost_rfb::{
-    preferred_encodings, ENC_CURSOR, ENC_CURSOR_WITH_ALPHA, ENC_XCURSOR,
-};
+use helmhost_rfb::{preferred_encodings, ENC_CURSOR, ENC_CURSOR_WITH_ALPHA, ENC_XCURSOR};
 
 #[test]
 fn preferred_encodings_advertise_local_cursors() {

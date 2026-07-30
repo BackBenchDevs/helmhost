@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build upgradeable Windows setup.exe via Inno Setup (fixed AppId).
-# Usage: package_windows_inno.sh <runner-Release-dir> <out-dir> <version> <channel>
+# Usage: package_windows_inno.sh <runner-Release-dir> <out-dir> <version> <channel> [output-basename.exe]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,10 +8,11 @@ SRC="${1:-}"
 OUT_DIR="${2:-}"
 VER="${3:-}"
 CHANNEL="${4:-stable}"
+OUT_BASENAME="${5:-}"
 ISS="$ROOT/packaging/windows/helmhost.iss"
 
 if [[ -z "$SRC" || -z "$OUT_DIR" || -z "$VER" ]]; then
-  echo "usage: $0 <Release-dir> <out-dir> <version> [channel]" >&2
+  echo "usage: $0 <Release-dir> <out-dir> <version> [channel] [output-basename.exe]" >&2
   exit 1
 fi
 if [[ ! -d "$SRC" ]]; then
@@ -24,6 +25,26 @@ if [[ ! -f "$ISS" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
+
+if [[ -z "$OUT_BASENAME" ]]; then
+  OUT_BASENAME="$("$ROOT/scripts/artifact_basename.sh" \
+    --os windows --arch x64 --ext exe --setup --channel "$CHANNEL" --ver "$VER")"
+fi
+# Inno OutputBaseFilename is without .exe
+OUT_BASE="${OUT_BASENAME%.exe}"
+
+CODENAME="$("$ROOT/scripts/hh-version" show --json 2>/dev/null \
+  | sed -n 's/.*"release_tag":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+CODENAME="$(printf '%s' "${CODENAME:-lantern}" | tr '[:upper:]' '[:lower:]')"
+
+RC_SUFFIX=""
+RC="${HELMHOST_RC:-}"
+if [[ -z "$RC" && -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" =~ -rc\.([0-9]+)$ ]]; then
+  RC="${BASH_REMATCH[1]}"
+fi
+if [[ -n "$RC" ]]; then
+  RC_SUFFIX="-rc.${RC}"
+fi
 
 find_iscc() {
   if command -v ISCC.exe >/dev/null 2>&1; then
@@ -53,13 +74,11 @@ ISCC="$(find_iscc)" || {
   exit 1
 }
 
-# Inno wants Windows-style paths when possible
 win_path() {
   local p="$1"
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -w "$p"
   else
-    # Git Bash: /c/foo → C:\foo
     if [[ "$p" =~ ^/([a-zA-Z])/(.*)$ ]]; then
       echo "${BASH_REMATCH[1]^}:\\${BASH_REMATCH[2]//\//\\}"
     else
@@ -75,14 +94,23 @@ ISS_W="$(win_path "$ISS")"
 "$ISCC" \
   "//DMyAppVersion=${VER}" \
   "//DMyAppChannel=${CHANNEL}" \
+  "//DMyAppCodename=${CODENAME}" \
+  "//DMyAppRcSuffix=${RC_SUFFIX}" \
+  "//DMyOutputBase=${OUT_BASE}" \
   "//DMySourceDir=${SRC_W}" \
   "//DMyOutDir=${OUT_W}" \
   "$ISS_W"
 
-SETUP="$OUT_DIR/helmhost-${CHANNEL}-windows-x64-v${VER}-setup.exe"
+SETUP="$OUT_DIR/${OUT_BASENAME}"
 if [[ ! -f "$SETUP" ]]; then
-  echo "error: expected $SETUP after ISCC" >&2
-  ls -la "$OUT_DIR" >&2 || true
-  exit 1
+  # Fallback if Inno ignored MyOutputBase
+  SETUP_ALT="$OUT_DIR/helmhost-${CHANNEL}-windows-x64-${CODENAME}-v${VER}${RC_SUFFIX}-setup.exe"
+  if [[ -f "$SETUP_ALT" ]]; then
+    SETUP="$SETUP_ALT"
+  else
+    echo "error: expected $SETUP after ISCC" >&2
+    ls -la "$OUT_DIR" >&2 || true
+    exit 1
+  fi
 fi
 echo "wrote $SETUP"

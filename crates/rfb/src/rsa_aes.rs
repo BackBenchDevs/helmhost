@@ -128,14 +128,14 @@ impl EaxKeys {
         let ad = (plaintext.len() as u16).to_be_bytes();
         let mut body = plaintext.to_vec();
         let tag = if self.key_bytes == 16 {
-            let cipher = Eax::<Aes128>::new_from_slice(&self.write_key[..16])
-                .map_err(|e| e.to_string())?;
+            let cipher =
+                Eax::<Aes128>::new_from_slice(&self.write_key[..16]).map_err(|e| e.to_string())?;
             cipher
                 .encrypt_in_place_detached(Nonce::from_slice(&self.write_counter), &ad, &mut body)
                 .map_err(|_| "AES-EAX encrypt failed".to_string())?
         } else {
-            let cipher = Eax::<Aes256>::new_from_slice(&self.write_key[..32])
-                .map_err(|e| e.to_string())?;
+            let cipher =
+                Eax::<Aes256>::new_from_slice(&self.write_key[..32]).map_err(|e| e.to_string())?;
             cipher
                 .encrypt_in_place_detached(Nonce::from_slice(&self.write_counter), &ad, &mut body)
                 .map_err(|_| "AES-EAX encrypt failed".to_string())?
@@ -162,8 +162,8 @@ impl EaxKeys {
         let mut body = data.to_vec();
         let tag = Tag::from_slice(mac);
         if self.key_bytes == 16 {
-            let cipher = Eax::<Aes128>::new_from_slice(&self.read_key[..16])
-                .map_err(|e| e.to_string())?;
+            let cipher =
+                Eax::<Aes128>::new_from_slice(&self.read_key[..16]).map_err(|e| e.to_string())?;
             cipher
                 .decrypt_in_place_detached(
                     Nonce::from_slice(&self.read_counter),
@@ -173,8 +173,8 @@ impl EaxKeys {
                 )
                 .map_err(|_| "AES-EAX decrypt/auth failed".to_string())?;
         } else {
-            let cipher = Eax::<Aes256>::new_from_slice(&self.read_key[..32])
-                .map_err(|e| e.to_string())?;
+            let cipher =
+                Eax::<Aes256>::new_from_slice(&self.read_key[..32]).map_err(|e| e.to_string())?;
             cipher
                 .decrypt_in_place_detached(
                     Nonce::from_slice(&self.read_counter),
@@ -272,7 +272,7 @@ pub async fn rsa_aes_authenticate<S: AsyncRead + AsyncWrite + Unpin>(
     if !(MIN_KEY_BITS..=MAX_KEY_BITS).contains(&server_key_bits) {
         return Err(format!("RSA-AES: bad server key length {server_key_bits}"));
     }
-    let rsa_bytes = ((server_key_bits + 7) / 8) as usize;
+    let rsa_bytes = server_key_bits.div_ceil(8) as usize;
     let server_n = read_exact(stream, rsa_bytes).await?;
     let server_e = read_exact(stream, rsa_bytes).await?;
     let server_pub = RsaPublicKey::new(
@@ -590,12 +590,11 @@ mod tests {
         assert_eq!(RsaAesParams::for_sec_type(SEC_RA2).unwrap().key_bits, 128);
         assert!(RsaAesParams::for_sec_type(SEC_RA2).unwrap().all_encrypted);
         assert!(!RsaAesParams::for_sec_type(SEC_RA2NE).unwrap().all_encrypted);
-        assert_eq!(
-            RsaAesParams::for_sec_type(SEC_RA256).unwrap().key_bits,
-            256
+        assert_eq!(RsaAesParams::for_sec_type(SEC_RA256).unwrap().key_bits, 256);
+        assert!(
+            !RsaAesParams::for_sec_type(SEC_RANE256)
+                .unwrap()
+                .all_encrypted
         );
-        assert!(!RsaAesParams::for_sec_type(SEC_RANE256)
-            .unwrap()
-            .all_encrypted);
     }
 }

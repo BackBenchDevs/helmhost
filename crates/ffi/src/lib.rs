@@ -82,10 +82,20 @@ pub fn core_version() -> String {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum FfiEvent {
-    DesktopResize { w: u32, h: u32 },
-    FramebufferDirty { x: i32, y: i32, w: u32, h: u32 },
+    DesktopResize {
+        w: u32,
+        h: u32,
+    },
+    FramebufferDirty {
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    },
     Bell,
-    Clipboard { text: String },
+    Clipboard {
+        text: String,
+    },
     CursorChanged {
         w: u32,
         h: u32,
@@ -94,9 +104,14 @@ enum FfiEvent {
         /// Base64-encoded non-premultiplied RGBA8 (`w*h*4`); empty when hidden.
         rgba_b64: String,
     },
-    CursorPosition { x: u32, y: u32 },
+    CursorPosition {
+        x: u32,
+        y: u32,
+    },
     Disconnected,
-    Error { message: String },
+    Error {
+        message: String,
+    },
     None,
 }
 

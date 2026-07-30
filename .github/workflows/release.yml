@@ -35,9 +35,15 @@ jobs:
           cache: true
       - name: Linux deps
         if: runner.os == 'Linux'
+        env:
+          NFPM_VERSION: 2.41.3
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev rpm curl
+          curl -sL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nfpm
+          nfpm --version
       - name: Windows Inno Setup
         if: runner.os == 'Windows'
         shell: bash
@@ -50,12 +56,14 @@ jobs:
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME}"
-          if [[ "$TAG" == *-rc.* ]]; then
+          if [[ "$TAG" =~ -rc\.([0-9]+)$ ]]; then
             echo "channel=rcs" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "rc=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
           else
             echo "channel=stable" >> "$GITHUB_OUTPUT"
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "rc=" >> "$GITHUB_OUTPUT"
           fi
       - name: Check tag agrees with VERSION
         shell: bash
@@ -68,7 +76,9 @@ jobs:
         shell: bash
         env:
           HELMHOST_CHANNEL: ${{ steps.meta.outputs.channel }}
+          HELMHOST_RC: ${{ steps.meta.outputs.rc }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           chmod +x scripts/*.sh scripts/hh-version
           ./scripts/hh-version sync --build "${GITHUB_RUN_NUMBER}"
@@ -83,6 +93,15 @@ jobs:
           for f in dist/${HELMHOST_CHANNEL}/*.zip dist/${HELMHOST_CHANNEL}/*.tar.gz; do
             ./scripts/assert_ffi_in_artifact.sh "$f"
           done
+          if [[ "$(uname -s)" == Linux ]]; then
+            shopt -s nullglob
+            debs=(dist/${HELMHOST_CHANNEL}/*.deb)
+            rpms=(dist/${HELMHOST_CHANNEL}/*.rpm)
+            apps=(dist/${HELMHOST_CHANNEL}/*.AppImage)
+            ((${#debs[@]} > 0)) || { echo "missing .deb" >&2; exit 1; }
+            ((${#rpms[@]} > 0)) || { echo "missing .rpm" >&2; exit 1; }
+            ((${#apps[@]} > 0)) || { echo "missing .AppImage" >&2; exit 1; }
+          fi
           ls -la dist/${HELMHOST_CHANNEL}/
       - name: Sign macOS zip (Ed25519)
         if: runner.os == 'macOS'
@@ -145,7 +164,8 @@ jobs:
           mkdir -p release-assets
           find artifacts -type f \( \
             -name '*.zip' -o -name '*.tar.gz' -o \
-            -name '*.pkg' -o -name '*.deb' -o -name '*-setup.exe' -o \
+            -name '*.pkg' -o -name '*.deb' -o -name '*.rpm' -o \
+            -name '*.AppImage' -o -name '*-setup.exe' -o \
             -name 'SHA256SUMS' -o -name '*.sha256' -o \
             -name 'macos.edsig' -o -name 'windows.dsasig' \
           \) -print | while read -r f; do

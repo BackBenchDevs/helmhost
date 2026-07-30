@@ -69,6 +69,7 @@ credentials.json
 
 # Packaged builds
 dist/
+packaging/linux/stage/
 
 # License inventory (regenerate via scripts/generate_third_party_notices.sh)
 apps/client/assets/legal/THIRD_PARTY_NOTICES.generated.md

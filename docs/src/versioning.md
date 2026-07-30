@@ -63,3 +63,13 @@ Helmhost Lighthouse — Lantern (v0.1.0)
 ```
 
 Protocol / clap-style surfaces use **semver only** (no `+build`, no quotes).
+
+## Release artifact filenames
+
+```text
+helmhost-{channel}-{os}-{arch}-{codename}-v{ver}[-rc.N][-setup].{ext}
+```
+
+Built by `scripts/artifact_basename.sh` (used from `build_release.sh` / `build_dev.sh`).
+`codename` is the `release_tag` from `codenames.toml` (e.g. `lantern`).
+RC builds append `-rc.N` from the git tag or `HELMHOST_RC`.

@@ -131,7 +131,10 @@ pub enum SessionEvent {
         rgba: Vec<u8>,
     },
     /// Server-driven cursor warp (VMwareCursorPosition).
-    CursorPosition { x: u16, y: u16 },
+    CursorPosition {
+        x: u16,
+        y: u16,
+    },
     Disconnected,
     Error(String),
 }

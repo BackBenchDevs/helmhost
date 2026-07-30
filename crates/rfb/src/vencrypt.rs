@@ -186,8 +186,7 @@ pub async fn negotiate_vencrypt_subtype<S: AsyncRead + AsyncWrite + Unpin>(
     {
         return Err(helmhost_core::NEED_USERNAME_PASSWORD.to_string());
     }
-    if (matches!(chosen, VENCRYPT_TLSVNC | VENCRYPT_X509VNC)
-        || chosen == u32::from(SEC_VNC_AUTH))
+    if (matches!(chosen, VENCRYPT_TLSVNC | VENCRYPT_X509VNC) || chosen == u32::from(SEC_VNC_AUTH))
         && !have_password
     {
         return Err(helmhost_core::NEED_PASSWORD.to_string());

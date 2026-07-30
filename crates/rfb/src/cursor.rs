@@ -40,7 +40,7 @@ fn check_size(w: u16, h: u16) -> Result<(), String> {
 }
 
 fn mask_bytes_per_row(w: u16) -> usize {
-    ((w as usize) + 7) / 8
+    (w as usize).div_ceil(8)
 }
 
 fn unpremultiply_rgba(buf: &mut [u8]) {

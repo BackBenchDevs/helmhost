@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Debug/profile desktop package for the current OS (portable only).
+# Names: helmhost-dev-{os}-{arch}-{codename}-{sha}.{ext}
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="${ROOT}/tools/flutter/bin:${PATH:-}"
@@ -9,6 +10,12 @@ SHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
 OUT="$ROOT/dist/${CHANNEL}"
 mkdir -p "$OUT"
 chmod +x "$ROOT"/scripts/*.sh 2>/dev/null || true
+
+basename_dev() {
+  local os="$1" arch="$2" ext="$3"
+  "$ROOT/scripts/artifact_basename.sh" \
+    --os "$os" --arch "$arch" --ext "$ext" --channel "$CHANNEL" --sha "$SHA"
+}
 
 cd "$ROOT"
 ./scripts/hh-version sync --build "${GITHUB_RUN_NUMBER:-1}"
@@ -21,7 +28,6 @@ win_path() {
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -w "$p"
   else
-    # Git Bash: /c/foo → C:\foo
     if [[ "$p" =~ ^/([a-zA-Z])/(.*)$ ]]; then
       echo "${BASH_REMATCH[1]^}:\\${BASH_REMATCH[2]//\//\\}"
     else
@@ -52,7 +58,7 @@ case "$(uname -s)" in
     flutter build macos --debug
     APP="build/macos/Build/Products/Debug/helmhost.app"
     "$ROOT/scripts/copy_ffi_into_bundle.sh" debug "$ROOT/apps/client/${APP}/Contents/MacOS"
-    ZIP="$OUT/helmhost-${CHANNEL}-macos-$(uname -m)-${SHA}.zip"
+    ZIP="$OUT/$(basename_dev macos "$(uname -m)" zip)"
     ditto -c -k --sequesterRsrc --keepParent \
       "$ROOT/apps/client/${APP}" "$ZIP"
     echo "wrote $ZIP"
@@ -62,7 +68,7 @@ case "$(uname -s)" in
     flutter build linux --debug
     BUNDLE="build/linux/x64/debug/bundle"
     "$ROOT/scripts/copy_ffi_into_bundle.sh" debug "$ROOT/apps/client/${BUNDLE}"
-    TAR="$OUT/helmhost-${CHANNEL}-linux-x64-${SHA}.tar.gz"
+    TAR="$OUT/$(basename_dev linux x64 tar.gz)"
     tar -C "$ROOT/apps/client/${BUNDLE}" -czf "$TAR" .
     echo "wrote $TAR"
     "$ROOT/scripts/assert_ffi_in_artifact.sh" "$TAR"
@@ -71,7 +77,7 @@ case "$(uname -s)" in
     flutter build windows --debug
     REL="build/windows/x64/runner/Debug"
     "$ROOT/scripts/copy_ffi_into_bundle.sh" debug "$ROOT/apps/client/${REL}"
-    ZIP="$OUT/helmhost-${CHANNEL}-windows-x64-${SHA}.zip"
+    ZIP="$OUT/$(basename_dev windows x64 zip)"
     zip_dir "$ROOT/apps/client/${REL}" "$ZIP"
     echo "wrote $ZIP"
     "$ROOT/scripts/assert_ffi_in_artifact.sh" "$ZIP"

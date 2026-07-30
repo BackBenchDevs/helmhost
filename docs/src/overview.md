@@ -10,8 +10,11 @@ This site is the **public** docs tree. Local planning notes may live under `plan
 
 | Channel | How | Artifacts |
 |---------|-----|-----------|
-| **dev** | Push to `main` / `dev` → prerelease `dev-<sha>` | portable zip/tar |
-| **rcs** | Tag `vX.Y.Z-rc.N` | zip/tar + `.pkg` / `.deb` / `-setup.exe` |
+| **dev** | Push to `main` / `dev` → prerelease `dev-<sha>` | portable zip/tar (`helmhost-dev-…-{sha}.{ext}`) |
+| **rcs** | Tag `vX.Y.Z-rc.N` | zip/tar/AppImage + `.pkg` / `.deb` / `.rpm` / `-setup.exe` |
 | **stable** | Tag `vX.Y.Z` via `./scripts/hh-version` | same as rcs |
 
-Installers are upgradeable (macOS pkg `com.bbdevs.helmhost` / deb `helmhost` / fixed Inno AppId). Docs site: GitHub Pages from `docs/` (Actions).
+Name pattern: `helmhost-{channel}-{os}-{arch}-{codename}-v{ver}[-rc.N][-setup].{ext}`
+(e.g. `helmhost-stable-linux-x64-lantern-v0.1.0.deb`).
+
+Installers are upgradeable (macOS pkg `com.bbdevs.helmhost` / deb+rpm `helmhost` / fixed Inno AppId). Docs site: GitHub Pages from `docs/` (Actions).

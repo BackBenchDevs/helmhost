@@ -79,10 +79,10 @@ fn pointer_and_key_encode() {
 
 #[test]
 fn preferred_encodings_order() {
+    use helmhost_rfb::encoding::{ENC_VMWARE_CURSOR, ENC_VMWARE_CURSOR_POSITION};
     use helmhost_rfb::{
         ENC_CONTINUOUS_UPDATES, ENC_CURSOR, ENC_CURSOR_WITH_ALPHA, ENC_TIGHT, ENC_XCURSOR,
     };
-    use helmhost_rfb::encoding::{ENC_VMWARE_CURSOR, ENC_VMWARE_CURSOR_POSITION};
     assert_eq!(
         preferred_encodings(),
         [

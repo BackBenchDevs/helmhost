@@ -29,7 +29,7 @@ use crate::rsa_aes::{rsa_aes_authenticate, AesEaxIo, RsaAesParams};
 use crate::tight::{read_and_decode_tight, TightStream};
 use crate::vencrypt::{
     negotiate_vencrypt_subtype, vencrypt_subtype_needs_tls, wrap_tcp_tls, TlsOptions,
-    VENCRYPT_PLAIN, VENCRYPT_TLSPLAIN, VENCRYPT_TLSNONE, VENCRYPT_TLSVNC, VENCRYPT_X509NONE,
+    VENCRYPT_PLAIN, VENCRYPT_TLSNONE, VENCRYPT_TLSPLAIN, VENCRYPT_TLSVNC, VENCRYPT_X509NONE,
     VENCRYPT_X509PLAIN, VENCRYPT_X509VNC,
 };
 use crate::zrle::{decode_zrle_with, ZrleStream};
@@ -167,8 +167,7 @@ pub async fn connect_stream(
     prefer_vencrypt: bool,
     encodings: &[i32],
 ) -> Result<SessionHandle, String> {
-    let (init, special) =
-        handshake_security_and_init(&mut stream, &creds, prefer_vencrypt).await?;
+    let (init, special) = handshake_security_and_init(&mut stream, &creds, prefer_vencrypt).await?;
 
     if special == Some(SEC_VENCRYPT) {
         return connect_vencrypt(id, stream, host, creds, tls, encodings).await;
@@ -733,7 +732,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
                 let g = state.lock().await;
                 g.pixel_format.bytes_per_pixel()
             };
-            let mask_len = (((hdr.w as usize) + 7) / 8) * (hdr.h as usize);
+            let mask_len = (hdr.w as usize).div_ceil(8) * (hdr.h as usize);
             let nbytes = (hdr.w as usize) * (hdr.h as usize) * bpp + mask_len;
             let data = if nbytes == 0 {
                 Vec::new()
@@ -759,7 +758,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
             Ok((RectAction::Continue, None))
         }
         ENC_XCURSOR => {
-            let bitmap_len = (((hdr.w as usize) + 7) / 8) * (hdr.h as usize);
+            let bitmap_len = (hdr.w as usize).div_ceil(8) * (hdr.h as usize);
             let nbytes = if hdr.w == 0 || hdr.h == 0 {
                 0
             } else {
@@ -840,14 +839,7 @@ async fn handle_rect<R: AsyncRead + Unpin>(
             Ok((RectAction::Continue, None))
         }
         ENC_VMWARE_CURSOR_POSITION => {
-            send_event(
-                ev_tx,
-                SessionEvent::CursorPosition {
-                    x: hdr.x,
-                    y: hdr.y,
-                },
-            )
-            .await;
+            send_event(ev_tx, SessionEvent::CursorPosition { x: hdr.x, y: hdr.y }).await;
             Ok((RectAction::Continue, None))
         }
         other => {

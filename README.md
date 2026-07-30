@@ -46,8 +46,17 @@ Do **not** hand-edit version in `Cargo.toml` / `pubspec.yaml`. Details: [docs/sr
 | Host | Portable | Installable (upgradeable) |
 |------|----------|---------------------------|
 | macOS | `.zip` (`.app`) | `.pkg` (`com.bbdevs.helmhost`) |
-| Linux | `.tar.gz` | `.deb` (package `helmhost`) |
+| Linux | `.tar.gz` / `.AppImage` | `.deb` / `.rpm` (package `helmhost`) |
 | Windows | `.zip` | `-setup.exe` (Inno, fixed AppId) |
+
+Artifact basename (all channels):
+
+```text
+helmhost-{channel}-{os}-{arch}-{codename}-v{ver}[-rc.N][-setup].{ext}
+```
+
+Examples: `helmhost-stable-linux-x64-lantern-v0.1.0.deb`,
+`helmhost-rcs-macos-arm64-lantern-v0.1.0-rc.8.zip`.
 
 Windows local: install [Inno Setup 6](https://jrsoftware.org/isinfo.php) so `ISCC.exe` is on PATH.
 Dev/debug portable only: `./scripts/build_dev.sh`.

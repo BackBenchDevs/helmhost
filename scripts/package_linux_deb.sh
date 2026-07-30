@@ -3,6 +3,7 @@
 # Usage: package_linux_deb.sh <bundle-dir> <out-deb> <version> <channel>
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUNDLE="${1:-}"
 OUT_DEB="${2:-}"
 VER="${3:-}"
@@ -23,30 +24,9 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/helmhost-deb.XXXXXX")"
 cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 
-OPT="$STAGE/opt/helmhost"
-mkdir -p "$OPT" "$STAGE/usr/bin" "$STAGE/usr/share/applications" "$STAGE/DEBIAN"
-cp -a "$BUNDLE"/. "$OPT/"
+mkdir -p "$STAGE/DEBIAN"
+"$ROOT/scripts/package_linux_stage.sh" "$BUNDLE" "$STAGE" "$CHANNEL"
 
-# Wrapper so PATH finds helmhost
-cat >"$STAGE/usr/bin/helmhost" <<'EOF'
-#!/bin/sh
-exec /opt/helmhost/helmhost "$@"
-EOF
-chmod 755 "$STAGE/usr/bin/helmhost"
-chmod 755 "$OPT/helmhost" 2>/dev/null || true
-
-cat >"$STAGE/usr/share/applications/helmhost.desktop" <<EOF
-[Desktop Entry]
-Name=Helmhost
-Comment=Open multi-session RFB / VNC viewer
-Exec=/usr/bin/helmhost
-Icon=helmhost
-Terminal=false
-Type=Application
-Categories=Network;RemoteAccess;
-EOF
-
-# Approximate installed size in KiB
 INSTALLED_SIZE="$(du -sk "$STAGE/opt" "$STAGE/usr" | awk '{s+=$1} END {print s}')"
 
 cat >"$STAGE/DEBIAN/control" <<EOF
@@ -64,5 +44,24 @@ Description: Open multi-session RFB / VNC viewer
  Reinstalling a newer Version upgrades in place (same package name).
 EOF
 
+cat >"$STAGE/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+update-desktop-database -q /usr/share/applications 2>/dev/null || true
+gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+exit 0
+EOF
+chmod 755 "$STAGE/DEBIAN/postinst"
+
+cat >"$STAGE/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+update-desktop-database -q /usr/share/applications 2>/dev/null || true
+gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+exit 0
+EOF
+chmod 755 "$STAGE/DEBIAN/postrm"
+
+mkdir -p "$(dirname "$OUT_DEB")"
 dpkg-deb --build --root-owner-group "$STAGE" "$OUT_DEB"
 echo "wrote $OUT_DEB"
