@@ -368,8 +368,12 @@ void ExclusiveGrab::Attach(flutter::BinaryMessenger* messenger, HWND hwnd) {
 }
 
 void ExclusiveGrab::Detach() {
-  std::lock_guard<std::mutex> lock(g_mu);
+  // StopHook acquires g_mu while clearing pressed keys. Do not hold the
+  // non-recursive mutex here: reacquiring it during teardown can deadlock
+  // or terminate the process through the Windows message handler.
   StopHook();
+  std::lock_guard<std::mutex> lock(g_mu);
+  if (g_channel) g_channel->SetMethodCallHandler(nullptr);
   g_channel.reset();
   g_hwnd = nullptr;
 }

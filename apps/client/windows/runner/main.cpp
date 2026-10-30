@@ -4,9 +4,11 @@
 
 #include "flutter_window.h"
 #include "utils.h"
+#include "startup_log.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  LogStartupPhase(L"process start");
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
@@ -28,8 +30,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"helmhost", origin, size)) {
+    LogStartupPhase(L"window creation failed");
     return EXIT_FAILURE;
   }
+  LogStartupPhase(L"window created; entering message loop");
   window.SetQuitOnClose(true);
 
   ::MSG msg;
@@ -39,5 +43,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   ::CoUninitialize();
+  LogStartupPhase(L"message loop exited");
   return EXIT_SUCCESS;
 }

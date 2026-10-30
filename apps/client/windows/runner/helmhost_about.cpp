@@ -22,3 +22,9 @@ void HelmhostAbout::ShowFromFlutter(HWND /*hwnd*/) {
   }
   channel_->InvokeMethod("showAbout", nullptr);
 }
+
+void HelmhostAbout::Detach() {
+  if (channel_) channel_->SetMethodCallHandler(nullptr);
+  channel_.reset();
+  hwnd_ = nullptr;
+}

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'library/hub_page.dart';
+import 'logging/startup_diagnostics.dart';
 import 'prefs.dart';
 import 'session/session_ipc.dart';
 import 'session/session_page.dart';
@@ -14,9 +16,21 @@ import 'ui/app_about.dart';
 import 'update/app_updater.dart';
 
 Future<void> main(List<String> args) async {
+  recordStartupPhase('Dart entrypoint');
+  try {
+    await _startApp(args);
+  } catch (error) {
+    recordStartupPhase('startup failed: ${error.runtimeType}');
+    rethrow;
+  }
+}
+
+Future<void> _startApp(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  recordStartupPhase('initializing window manager');
   await windowManager.ensureInitialized();
 
+  recordStartupPhase('reading window definition');
   final controller = await WindowController.fromCurrentEngine();
   final raw = controller.arguments.trim();
   Map<String, dynamic> winArgs = {};
@@ -28,6 +42,7 @@ Future<void> main(List<String> args) async {
     }
   }
 
+  recordStartupPhase('opening preferences');
   final prefs = await AppPrefs.open();
   final role = winArgs['role'] as String? ?? 'hub';
   if (role == 'session') {
@@ -61,9 +76,11 @@ Future<void> main(List<String> args) async {
     final sessionId = (winArgs['sessionId'] as num).toInt();
     final title = winArgs['title'] as String? ?? 'Session';
     final entryId = winArgs['entryId'] as String? ?? title;
-    final host = winArgs['host'] as String? ??
+    final host =
+        winArgs['host'] as String? ??
         (entryId.contains(':') ? entryId.split(':').first : entryId);
-    final port = (winArgs['port'] as num?)?.toInt() ??
+    final port =
+        (winArgs['port'] as num?)?.toInt() ??
         (entryId.contains(':')
             ? int.tryParse(entryId.split(':').last) ?? 5900
             : 5900);
@@ -74,23 +91,31 @@ Future<void> main(List<String> args) async {
         winArgs['accept_invalid_certs'] as bool? ?? false;
     final viewOnly = winArgs['view_only'] as bool? ?? false;
     await windowManager.setTitle(title);
-    runApp(SessionApp(
-      sessionId: sessionId,
-      title: title,
-      entryId: entryId,
-      host: host,
-      port: port,
-      username: username,
-      profileId: profileId,
-      preferVencrypt: preferVencrypt,
-      acceptInvalidCerts: acceptInvalidCerts,
-      viewOnly: viewOnly,
-      themeMode: prefs.themeMode,
-      prefs: prefs,
-    ));
+    runApp(
+      SessionApp(
+        sessionId: sessionId,
+        title: title,
+        entryId: entryId,
+        host: host,
+        port: port,
+        username: username,
+        profileId: profileId,
+        preferVencrypt: preferVencrypt,
+        acceptInvalidCerts: acceptInvalidCerts,
+        viewOnly: viewOnly,
+        themeMode: prefs.themeMode,
+        prefs: prefs,
+      ),
+    );
   } else {
-    // Sparkle / WinSparkle scheduled checks (no-op on Linux until user taps).
-    await createAppUpdater().init().catchError((_) {});
+    // Keep WinSparkle initialization out of the Windows startup path while
+    // investigating native aborts. Manual Check for Updates still initializes
+    // it through SparkleAppUpdater.checkForUpdates(). Dart catchError cannot
+    // recover from a native fail-fast in win_sparkle_init().
+    if (!Platform.isWindows) {
+      await createAppUpdater().init().catchError((_) {});
+    }
+    recordStartupPhase('preparing main window');
     const defaultSize = Size(1280, 720);
     const minSize = Size(960, 640);
     await windowManager.waitUntilReadyToShow(
@@ -108,6 +133,7 @@ Future<void> main(List<String> args) async {
         await windowManager.focus();
       },
     );
+    recordStartupPhase('starting hub UI');
     runApp(HubApp(prefs: prefs));
   }
 }

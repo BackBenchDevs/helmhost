@@ -11,6 +11,7 @@ add_executable(${BINARY_NAME} WIN32
   "helmhost_about.cpp"
   "exclusive_grab.cpp"
   "session_plugin_registrant.cc"
+  "startup_log.cpp"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
