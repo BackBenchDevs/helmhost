@@ -20,7 +20,9 @@ concurrency:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # Flutter 3.32 expects Visual Studio 2022; newer runner images can expose
+    # a Visual Studio version that this SDK does not recognize.
+    runs-on: windows-2022
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
