@@ -61,10 +61,17 @@ bool FlutterWindow::OnCreate() {
 
   flutter_controller_->ForceRedraw();
 
+  engine_created_ = true;
   return true;
 }
 
 void FlutterWindow::OnDestroy() {
+  if (!engine_created_) {
+    Win32Window::OnDestroy();
+    return;
+  }
+  engine_created_ = false;
+
   LogStartupPhase(L"window teardown start");
   ExclusiveGrab::Detach();
   HelmhostAbout::Detach();

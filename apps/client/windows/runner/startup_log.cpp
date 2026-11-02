@@ -29,11 +29,12 @@ void LogStartupPhase(const wchar_t* phase) {
   GetSystemTime(&now);
   wchar_t line[512];
   const int count = swprintf_s(
-      line, ARRAYSIZE(line), L"%04u-%02u-%02uT%02u:%02u:%02uZ pid=%lu %ls\r\n",
+      line, ARRAYSIZE(line),
+      L"%04u-%02u-%02uT%02u:%02u:%02u.%03uZ pid=%lu %ls\r\n",
       static_cast<unsigned>(now.wYear), static_cast<unsigned>(now.wMonth),
       static_cast<unsigned>(now.wDay), static_cast<unsigned>(now.wHour),
       static_cast<unsigned>(now.wMinute), static_cast<unsigned>(now.wSecond),
-      GetCurrentProcessId(), phase);
+      static_cast<unsigned>(now.wMilliseconds), GetCurrentProcessId(), phase);
   if (count > 0) {
     char utf8[2048];
     const int bytes = WideCharToMultiByte(CP_UTF8, 0, line, count, utf8,
@@ -47,4 +48,24 @@ void LogStartupPhase(const wchar_t* phase) {
     OutputDebugStringW(line);
   }
   CloseHandle(file);
+}
+
+namespace {
+
+LONG WINAPI StartupUnhandledExceptionFilter(EXCEPTION_POINTERS* info) {
+  if (info && info->ExceptionRecord) {
+    wchar_t phase[64];
+    if (swprintf_s(phase, ARRAYSIZE(phase), L"exception code=0x%08lX",
+                   static_cast<unsigned long>(
+                       info->ExceptionRecord->ExceptionCode)) > 0) {
+      LogStartupPhase(phase);
+    }
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
+}  // namespace
+
+void InstallStartupExceptionLogger() {
+  SetUnhandledExceptionFilter(StartupUnhandledExceptionFilter);
 }

@@ -7,6 +7,12 @@ $ErrorActionPreference = 'Stop'
 $exe = (Resolve-Path $Executable).Path
 $logDirectory = Join-Path $env:LOCALAPPDATA 'Helmhost/logs'
 $dartLog = Join-Path $logDirectory 'startup-dart.log'
+# Flutter tests and prior smoke attempts append to these logs. Clear them so
+# readiness checks and uploaded diagnostics belong only to this process.
+if (Test-Path $logDirectory) {
+    Remove-Item -Recurse -Force $logDirectory
+}
+New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 $process = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $ready = $false
