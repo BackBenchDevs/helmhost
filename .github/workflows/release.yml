@@ -21,7 +21,8 @@ jobs:
         include:
           - os: macos-latest
           - os: ubuntu-latest
-          - os: windows-latest
+          # Flutter 3.32 expects Visual Studio 2022.
+          - os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +33,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: "3.32.5"
           cache: true
       - name: Linux deps
         if: runner.os == 'Linux'
@@ -103,6 +105,17 @@ jobs:
             ((${#apps[@]} > 0)) || { echo "missing .AppImage" >&2; exit 1; }
           fi
           ls -la dist/${HELMHOST_CHANNEL}/
+      - name: Smoke Windows startup and shutdown
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke_windows_startup.ps1
+      - name: Upload Windows startup diagnostics
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-startup-logs-release
+          path: ~/AppData/Local/Helmhost/logs/
+          if-no-files-found: ignore
       - name: Sign macOS zip (Ed25519)
         if: runner.os == 'macOS'
         shell: bash
