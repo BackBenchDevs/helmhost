@@ -61,3 +61,47 @@ jobs:
         run: ./scripts/ci_flutter.sh
         env:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
+
+  # Flutter 3.32 expects Visual Studio 2022; windows-latest can expose a
+  # newer toolset that this SDK does not recognize.
+  flutter-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.1"
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.32.5"
+          cache: true
+      - name: Flutter analyze / test
+        shell: bash
+        run: ./scripts/ci_flutter.sh
+        env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+      - name: Build Windows release binary
+        shell: bash
+        env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/*.sh scripts/hh-version
+          ./scripts/hh-version sync --build "${GITHUB_RUN_NUMBER}"
+          cargo build -p helmhost-ffi --release
+          cd apps/client
+          flutter pub get
+          flutter build windows --release
+          ../scripts/copy_ffi_into_bundle.sh release build/windows/x64/runner/Release
+      - name: Smoke Windows startup and shutdown
+        shell: pwsh
+        run: ./scripts/smoke_windows_startup.ps1
+      - name: Upload Windows startup diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-startup-logs
+          path: ~/AppData/Local/Helmhost/logs/
+          if-no-files-found: ignore
