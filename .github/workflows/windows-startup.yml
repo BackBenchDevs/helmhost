@@ -1,0 +1,108 @@
+name: Windows startup fix
+
+on:
+  pull_request:
+  push:
+    branches: [codex/fix-windows-startup]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a Windows diagnostic prerelease
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-startup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    # Flutter 3.32 expects Visual Studio 2022; newer runner images can expose
+    # a Visual Studio version that this SDK does not recognize.
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.1'
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.32.5'
+          cache: true
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $compiler)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+          }
+      - name: Analyze and test Flutter
+        working-directory: apps/client
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter analyze
+          flutter test
+      - name: Build Windows portable and installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep diagnostic builds distinct from the reported builds 11/12.
+          GITHUB_RUN_NUMBER="$((GITHUB_RUN_NUMBER + 1000))" HELMHOST_CHANNEL=dev ./scripts/build_release.sh
+      - name: Verify startup on Windows
+        shell: pwsh
+        run: ./scripts/smoke_windows_startup.ps1
+      - name: Upload startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-startup-logs
+          path: ~/AppData/Local/Helmhost/logs/
+          if-no-files-found: ignore
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: helmhost-windows-startup-fix
+          path: dist/dev/*
+          if-no-files-found: error
+
+  publish:
+    needs: windows
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/codex/fix-windows-startup') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/codex/fix-windows-startup')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: helmhost-windows-startup-fix
+          path: release-assets
+      - name: Publish diagnostic Windows prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-startup-fix-${{ github.run_number }}-${{ github.run_attempt }}
+          target_commitish: ${{ github.sha }}
+          name: Windows startup fix — diagnostic build ${{ github.run_number }}
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          body: |
+            Windows startup hardening and diagnostics for the reported 0xc0000409 crash.
+
+            Includes the nested-mutex cleanup fix, native channel cleanup, guarded font-change handling, and persistent startup logs. Automatic WinSparkle initialization is disabled at Windows startup; manual update checking remains available.
+
+            This diagnostic build passed the Windows build, Flutter tests, and automated startup smoke check. The original machine-specific crash is not yet confirmed resolved.
+
+            Includes an installer, portable ZIP, and SHA-256 checksums. Packages are unsigned and this prerelease does not update the stable appcast.
+            Logs: %LOCALAPPDATA%\Helmhost\logs\startup.log and startup-dart.log.
+          files: release-assets/*

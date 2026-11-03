@@ -11,6 +11,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../bridge.dart';
 import '../logging/logger.dart';
+import '../logging/startup_diagnostics.dart';
 import '../prefs.dart';
 import '../session/credentials.dart';
 import '../session/session_ipc.dart';
@@ -258,10 +259,13 @@ class _HubPageState extends State<HubPage> with WindowListener {
 
   Future<void> _boot() async {
     try {
+      recordStartupPhase('opening Rust FFI library');
       final b = widget.bridge ?? HelmBridge.open();
       // Smoke FFI; cache core version for About / status chip.
+      recordStartupPhase('initializing Rust FFI');
       b.hello();
       final coreVer = b.coreVersion();
+      recordStartupPhase('loading connection registry');
       await b.initRegistry();
       String? thumbsRoot;
       // Injected bridges (tests) skip path_provider — it can hang without plugins.
@@ -278,7 +282,9 @@ class _HubPageState extends State<HubPage> with WindowListener {
         _error = null;
         _reloadCards();
       });
+      recordStartupPhase('hub ready');
     } catch (e) {
+      recordStartupPhase('hub startup failed: ${e.runtimeType}');
       if (!mounted) return;
       setState(() => _error = e.toString());
     }

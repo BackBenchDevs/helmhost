@@ -28,6 +28,10 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // True after OnCreate attaches a live Flutter engine. Create() calls Destroy
+  // before the HWND exists; skip teardown logging and channel cleanup then.
+  bool engine_created_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

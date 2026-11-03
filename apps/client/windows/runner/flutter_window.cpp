@@ -8,6 +8,7 @@
 #include "helmhost_about.h"
 #include "resource.h"
 #include "session_plugin_registrant.h"
+#include "startup_log.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -21,13 +22,18 @@ bool FlutterWindow::OnCreate() {
 
   RECT frame = GetClientArea();
 
+  LogStartupPhase(L"creating Flutter engine");
   flutter_controller_ = std::make_unique<flutter::FlutterViewController>(
       frame.right - frame.left, frame.bottom - frame.top, project_);
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
+    LogStartupPhase(L"Flutter engine or view unavailable");
     return false;
   }
+  LogStartupPhase(L"registering native plugins");
   RegisterPlugins(flutter_controller_->engine());
+  LogStartupPhase(L"native plugins registered");
   ExclusiveGrab::Attach(flutter_controller_->engine()->messenger(), GetHandle());
+  LogStartupPhase(L"input channel attached");
   // Secondary engines from desktop_multi_window need their own plugin set;
   // without this, session windows stay blank (window_manager MissingPlugin).
   // Skip AutoUpdater — WinSparkle is a process-wide singleton.
@@ -49,21 +55,32 @@ bool FlutterWindow::OnCreate() {
   SetMenu(GetHandle(), menubar);
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
+    LogStartupPhase(L"first Flutter frame");
     this->Show();
   });
 
   flutter_controller_->ForceRedraw();
 
+  engine_created_ = true;
   return true;
 }
 
 void FlutterWindow::OnDestroy() {
+  if (!engine_created_) {
+    Win32Window::OnDestroy();
+    return;
+  }
+  engine_created_ = false;
+
+  LogStartupPhase(L"window teardown start");
   ExclusiveGrab::Detach();
+  HelmhostAbout::Detach();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
 
   Win32Window::OnDestroy();
+  LogStartupPhase(L"window teardown complete");
 }
 
 LRESULT
@@ -90,7 +107,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       }
       break;
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      if (flutter_controller_ && flutter_controller_->engine()) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
   }
 

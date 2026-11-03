@@ -12,6 +12,7 @@
 class HelmhostAbout {
  public:
   static void Attach(flutter::BinaryMessenger* messenger, HWND hwnd);
+  static void Detach();
   static void ShowFromFlutter(HWND hwnd);
 
  private:
