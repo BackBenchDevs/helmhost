@@ -7,6 +7,8 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+#include <desktop_multi_window/desktop_multi_window_plugin.h>
+
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
@@ -77,6 +79,10 @@ static void my_application_activate(GApplication* application) {
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  // Secondary engines from desktop_multi_window need their own plugin set;
+  // without this, session windows crash (window_manager MissingPlugin).
+  desktop_multi_window_plugin_set_window_created_callback(
+      [](FlPluginRegistry* registry) { fl_register_plugins(registry); });
 
   FlEngine* engine = fl_view_get_engine(view);
   FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
@@ -111,6 +117,10 @@ static gboolean my_application_local_command_line(GApplication* application,
 
 // Implements GApplication::startup.
 static void my_application_startup(GApplication* application) {
+  // GtkApplication private state (including the menubar) is set up by the
+  // parent startup. Setting a menubar before that dereferences a null menu.
+  G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
+
   MyApplication* self = MY_APPLICATION(application);
   const GActionEntry entries[] = {
       {"about", about_action, nullptr, nullptr, nullptr},
@@ -124,8 +134,6 @@ static void my_application_startup(GApplication* application) {
   g_menu_append_submenu(menubar, "Help", G_MENU_MODEL(help));
   gtk_application_set_menubar(GTK_APPLICATION(application),
                               G_MENU_MODEL(menubar));
-
-  G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
 }
 
 // Implements GApplication::shutdown.
