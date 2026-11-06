@@ -1,13 +1,12 @@
 #include "my_application.h"
 
+#include <desktop_multi_window/desktop_multi_window_plugin.h>
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
-
-#include <desktop_multi_window/desktop_multi_window_plugin.h>
 
 struct _MyApplication {
   GtkApplication parent_instance;
@@ -37,6 +36,10 @@ static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
 static void about_action(GSimpleAction* action, GVariant* parameter,
                          gpointer user_data) {
   show_about_from_menu(MY_APPLICATION(user_data));
+}
+
+static void register_session_plugins(FlPluginRegistry* registry) {
+  fl_register_plugins(registry);
 }
 
 // Implements GApplication::activate.
@@ -79,10 +82,8 @@ static void my_application_activate(GApplication* application) {
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
-  // Secondary engines from desktop_multi_window need their own plugin set;
-  // without this, session windows crash (window_manager MissingPlugin).
   desktop_multi_window_plugin_set_window_created_callback(
-      [](FlPluginRegistry* registry) { fl_register_plugins(registry); });
+      register_session_plugins);
 
   FlEngine* engine = fl_view_get_engine(view);
   FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
@@ -117,8 +118,7 @@ static gboolean my_application_local_command_line(GApplication* application,
 
 // Implements GApplication::startup.
 static void my_application_startup(GApplication* application) {
-  // GtkApplication private state (including the menubar) is set up by the
-  // parent startup. Setting a menubar before that dereferences a null menu.
+  // Menubar storage exists only after GtkApplication::startup.
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
 
   MyApplication* self = MY_APPLICATION(application);
